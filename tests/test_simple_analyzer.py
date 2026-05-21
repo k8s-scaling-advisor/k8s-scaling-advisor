@@ -862,3 +862,114 @@ def test_analyze_csv_file_emits_json(tmp_path: Path):
     # Enums must be plain strings for downstream consumers.
     assert isinstance(workload["priority"], str)
     assert isinstance(workload["scaling_approach"], str)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Confidence scoring
+# ──────────────────────────────────────────────────────────────────────
+
+from k8s_advisor.simple_analyzer import _confidence_score  # noqa: E402
+
+
+def test_confidence_high_with_prometheus_clean_signal():
+    score, band, reasons = _confidence_score(
+        has_prometheus=True,
+        insufficient_data=False,
+        gc_runtime=False,
+        bursty_workload=False,
+        restart_rate=0.0,
+        pod_count=4,
+        has_cpu_limit=True,
+        has_mem_limit=True,
+    )
+    assert band == "high"
+    assert score >= 0.85
+    assert any("Prometheus" in r for r in reasons)
+    assert any("limits set" in r for r in reasons)
+
+
+def test_confidence_low_with_kubectl_only():
+    score, band, _reasons = _confidence_score(
+        has_prometheus=False,
+        insufficient_data=False,
+        gc_runtime=False,
+        bursty_workload=False,
+        restart_rate=0.0,
+        pod_count=2,
+        has_cpu_limit=False,
+        has_mem_limit=False,
+    )
+    # 0.55 base - 0 penalties + 0 bonus → "medium" upper, band "medium"
+    assert band == "medium"
+    assert score == 0.55
+
+
+def test_confidence_floor_when_insufficient_data():
+    score, band, reasons = _confidence_score(
+        has_prometheus=True,
+        insufficient_data=True,
+        gc_runtime=False,
+        bursty_workload=False,
+        restart_rate=0.0,
+        pod_count=4,
+        has_cpu_limit=True,
+        has_mem_limit=True,
+    )
+    # INSUFFICIENT_DATA short-circuits regardless of other signals.
+    assert score == 0.10
+    assert band == "low"
+    assert reasons == ["INSUFFICIENT_DATA — no usable signal"]
+
+
+def test_confidence_penalties_compound():
+    # Prometheus + bursty + GC + crash-loops + single replica should
+    # land in "low" band even with limits set.
+    score, band, reasons = _confidence_score(
+        has_prometheus=True,
+        insufficient_data=False,
+        gc_runtime=True,
+        bursty_workload=True,
+        restart_rate=5.0,  # > 2/day
+        pod_count=1,
+        has_cpu_limit=True,
+        has_mem_limit=True,
+    )
+    # 0.85 - 0.20 - 0.15 - 0.15 - 0.05 + 0.05 = 0.35 → "low"
+    assert score == 0.35
+    assert band == "low"
+    assert any("bursty" in r for r in reasons)
+    assert any("GC" in r for r in reasons)
+    assert any("restart" in r for r in reasons)
+
+
+def test_confidence_round_clamps_to_unit_interval():
+    # Even with all bonuses and no penalties, score must not exceed 1.0.
+    score, _band, _reasons = _confidence_score(
+        has_prometheus=True,
+        insufficient_data=False,
+        gc_runtime=False,
+        bursty_workload=False,
+        restart_rate=0.0,
+        pod_count=10,
+        has_cpu_limit=True,
+        has_mem_limit=True,
+    )
+    assert 0.0 <= score <= 1.0
+
+
+def test_analyze_workload_emits_confidence_fields():
+    row = _base_row()
+    row["CPU_P95(m)"] = "220"
+    workload = analyze_workload(row, has_prometheus=True)
+    assert hasattr(workload, "confidence")
+    assert 0.0 <= workload.confidence <= 1.0
+    assert workload.confidence_band in ("high", "medium", "low")
+    assert isinstance(workload.confidence_reasons, list)
+    assert workload.confidence_reasons  # non-empty
+
+
+def test_analyze_workload_confidence_lower_without_prometheus():
+    row = _base_row()
+    p_workload = analyze_workload(row, has_prometheus=True)
+    k_workload = analyze_workload(row, has_prometheus=False)
+    assert k_workload.confidence < p_workload.confidence

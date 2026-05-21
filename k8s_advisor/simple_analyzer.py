@@ -8,7 +8,7 @@ Works with namespace-scoped permissions (no cluster-admin required).
 import csv
 import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -163,6 +163,19 @@ class WorkloadAnalysis:
     gc_runtime: bool = False
     bursty_workload: bool = False
 
+    # Numeric confidence score in [0.0, 1.0] for the recommendation
+    # itself. Computed from the observable-evidence signals (Prometheus
+    # availability, restart noise, runtime shape, etc.) — see
+    # _confidence_score(). Useful for downstream gating ("only act on
+    # recommendations >= 0.7").
+    confidence: float = 0.0
+    # Human-readable rollup ("high" / "medium" / "low") derived from
+    # `confidence`. Convenience for the markdown report.
+    confidence_band: str = "low"
+    # Short human-readable strings describing what dragged confidence
+    # down (or up). Surfaces in the markdown rationale.
+    confidence_reasons: list = field(default_factory=list)
+
     # Quantified per-workload deltas, signed in millicores / Mi.
     # Positive = recommended request is below current (savings).
     # Negative = recommended request raises the floor (more capacity needed).
@@ -189,6 +202,63 @@ def safe_int(value, default=0):
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _confidence_score(
+    *,
+    has_prometheus: bool,
+    insufficient_data: bool,
+    gc_runtime: bool,
+    bursty_workload: bool,
+    restart_rate: float,
+    pod_count: int,
+    has_cpu_limit: bool,
+    has_mem_limit: bool,
+) -> tuple:
+    """Score the recommendation's data-quality from 0.0 to 1.0.
+
+    The score is heuristic, not statistical — it rolls up the same
+    boolean signals the analyzer already computes into a single number
+    plus a list of human-readable reasons. Downstream tooling can use
+    the number for gating ("auto-act on >= 0.8") and the reasons for
+    UI / report rendering.
+
+    Returns ``(score, band, reasons)`` where ``band`` is one of
+    "high" / "medium" / "low".
+    """
+    reasons: list = []
+    if insufficient_data:
+        # Floor: when the data itself is missing/misleading no scoring
+        # heuristic recovers it.
+        return (0.10, "low", ["INSUFFICIENT_DATA — no usable signal"])
+
+    score = 0.85 if has_prometheus else 0.55
+    reasons.append("Prometheus metrics available" if has_prometheus else "kubectl-only metrics-server data")
+
+    if bursty_workload:
+        score -= 0.20
+        reasons.append("bursty runtime — peaks under-represented")
+    if gc_runtime:
+        score -= 0.15
+        reasons.append("GC-managed runtime — memory shape distorted")
+    if restart_rate > 2.0:
+        score -= 0.15
+        reasons.append(f"restart rate {restart_rate:.1f}/day — metrics include crash-loop noise")
+    if pod_count <= 1:
+        score -= 0.05
+        reasons.append("single replica — no peer averaging")
+    if has_cpu_limit and has_mem_limit:
+        score += 0.05
+        reasons.append("CPU + memory limits set — saturation observable")
+
+    score = max(0.0, min(1.0, score))
+    if score >= 0.75:
+        band = "high"
+    elif score >= 0.50:
+        band = "medium"
+    else:
+        band = "low"
+    return (round(score, 2), band, reasons)
 
 
 def build_rationale(analysis: WorkloadAnalysis, has_prometheus: bool) -> str:
@@ -875,6 +945,21 @@ def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
         cpu_delta_m=cpu_delta_m,
         mem_delta_mi=mem_delta_mi,
     )
+
+    # Confidence score (used for downstream gating + report rendering).
+    score, band, reasons = _confidence_score(
+        has_prometheus=has_prometheus,
+        insufficient_data=insufficient_data,
+        gc_runtime=gc_runtime,
+        bursty_workload=bursty_workload,
+        restart_rate=restart_rate,
+        pod_count=pod_count,
+        has_cpu_limit=cpu_limit > 0,
+        has_mem_limit=mem_limit > 0,
+    )
+    analysis.confidence = score
+    analysis.confidence_band = band
+    analysis.confidence_reasons = reasons
 
     # Build rationale
     analysis.rationale = build_rationale(analysis, has_prometheus)

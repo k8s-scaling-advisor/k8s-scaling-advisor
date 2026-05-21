@@ -41,6 +41,11 @@
 **Rationale:** {{ analysis.rationale }}
 
 {% endif -%}
+{% if analysis.confidence > 0 -%}
+{% set _band_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(analysis.confidence_band, "⚪") -%}
+**Confidence:** {{ _band_emoji }} {{ analysis.confidence_band }} ({{ "%.2f" | format(analysis.confidence) }}){% if analysis.confidence_reasons %} — {{ analysis.confidence_reasons | join("; ") }}{% endif %}
+
+{% endif -%}
 {% if collapse_note -%}
 > _{{ collapse_note }}_
 
