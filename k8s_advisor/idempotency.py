@@ -33,6 +33,11 @@ from typing import Any
 #   2 — switched to SHA-256 to clear security-scanner flags (current).
 STATE_SCHEMA_VERSION = 2
 
+# Drop fingerprints we haven't observed in this many days. Long enough
+# that workloads paused for a normal release cycle still re-suppress on
+# return; short enough that the file stays bounded after churn.
+STATE_GC_DAYS = 365
+
 STATE_FILENAME = "seen.json"
 
 
@@ -124,8 +129,8 @@ def merge_run(prior: dict[str, Any], current_fingerprints: list[str]) -> dict[st
     Fingerprints in ``prior`` that the current run did NOT produce are
     kept (a workload disappearing from one run shouldn't reset its
     history; the operator may have suspended its CronJob). After
-    365 days of no observation entries are dropped to keep the file
-    bounded.
+    ``STATE_GC_DAYS`` days of no observation entries are dropped to
+    keep the file bounded.
     """
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     fps = dict(prior.get("fingerprints") or {})
@@ -138,9 +143,9 @@ def merge_run(prior: dict[str, Any], current_fingerprints: list[str]) -> dict[st
         else:
             fps[fp] = {"first_seen": now, "last_seen": now, "count": 1}
 
-    # GC entries we haven't seen in a year. Cheap to evaluate and keeps
-    # the state file from growing forever after workload churn.
-    cutoff = _ts_minus_days(now, 365)
+    # GC entries we haven't seen in STATE_GC_DAYS. Cheap to evaluate and
+    # keeps the state file from growing forever after workload churn.
+    cutoff = _ts_minus_days(now, STATE_GC_DAYS)
     fps = {fp: e for fp, e in fps.items() if (e.get("last_seen") or now) >= cutoff}
 
     return {"schema_version": STATE_SCHEMA_VERSION, "fingerprints": fps}
