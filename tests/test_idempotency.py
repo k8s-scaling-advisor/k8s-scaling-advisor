@@ -180,3 +180,109 @@ def test_merge_run_drops_entries_older_than_one_year():
     out = merge_run(prior, ["fresh"])
     assert "ancient" not in out["fingerprints"]
     assert "fresh" in out["fingerprints"]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# load_state() malformed-input hardening
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_load_state_drops_non_dict_entries(tmp_path: Path):
+    # An entry that's a bare string (not a dict) must be dropped, not
+    # propagated to merge_run() where it would crash on `.get(...)`.
+    (tmp_path / STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATE_SCHEMA_VERSION,
+                "fingerprints": {
+                    "good": {
+                        "first_seen": "2026-01-01T00:00:00+00:00",
+                        "last_seen": "2026-01-01T00:00:00+00:00",
+                        "count": 3,
+                    },
+                    "bad": "not-a-dict",
+                    "also-bad": 42,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = load_state(tmp_path)
+    assert "good" in state["fingerprints"]
+    assert "bad" not in state["fingerprints"]
+    assert "also-bad" not in state["fingerprints"]
+
+
+def test_load_state_drops_entries_missing_timestamps(tmp_path: Path):
+    (tmp_path / STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATE_SCHEMA_VERSION,
+                "fingerprints": {
+                    "no-first": {"last_seen": "2026-01-01T00:00:00+00:00", "count": 1},
+                    "no-last": {"first_seen": "2026-01-01T00:00:00+00:00", "count": 1},
+                    "non-string-ts": {"first_seen": 123, "last_seen": 456, "count": 1},
+                    "ok": {
+                        "first_seen": "2026-01-01T00:00:00+00:00",
+                        "last_seen": "2026-01-01T00:00:00+00:00",
+                        "count": 1,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = load_state(tmp_path)
+    assert set(state["fingerprints"].keys()) == {"ok"}
+
+
+def test_load_state_coerces_bad_count_to_one(tmp_path: Path):
+    (tmp_path / STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATE_SCHEMA_VERSION,
+                "fingerprints": {
+                    "bad-count": {
+                        "first_seen": "2026-01-01T00:00:00+00:00",
+                        "last_seen": "2026-01-01T00:00:00+00:00",
+                        "count": "not-a-number",
+                    },
+                    "negative-count": {
+                        "first_seen": "2026-01-01T00:00:00+00:00",
+                        "last_seen": "2026-01-01T00:00:00+00:00",
+                        "count": -5,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = load_state(tmp_path)
+    # Both entries kept; counts clamped to >= 1.
+    assert state["fingerprints"]["bad-count"]["count"] == 1
+    assert state["fingerprints"]["negative-count"]["count"] == 1
+
+
+def test_load_then_merge_does_not_crash_on_corrupt_entries(tmp_path: Path):
+    """End-to-end: pathological input must not propagate to merge_run."""
+    (tmp_path / STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATE_SCHEMA_VERSION,
+                "fingerprints": {
+                    "garbage": "totally not a dict",
+                    "good": {
+                        "first_seen": "2026-01-01T00:00:00+00:00",
+                        "last_seen": "2026-01-01T00:00:00+00:00",
+                        "count": 1,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = load_state(tmp_path)
+    # If merge_run() ever sees the unsanitized "garbage" entry it will
+    # call .get("count", 1) on a string and crash with AttributeError.
+    out = merge_run(state, ["good"])
+    assert out["fingerprints"]["good"]["count"] == 2

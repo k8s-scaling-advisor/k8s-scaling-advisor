@@ -27,7 +27,11 @@ from typing import Any
 # Bumped if the fingerprint shape ever changes — old state files become
 # unreadable and the next run treats every workload as new. Better than
 # silently mis-matching after a schema change.
-STATE_SCHEMA_VERSION = 1
+#
+# Versions:
+#   1 — initial schema, used SHA-1 fingerprint (never released).
+#   2 — switched to SHA-256 to clear security-scanner flags (current).
+STATE_SCHEMA_VERSION = 2
 
 STATE_FILENAME = "seen.json"
 
@@ -41,16 +45,18 @@ def fingerprint(
     recommended_cpu: str,
     recommended_mem: str,
 ) -> str:
-    """Stable SHA-1 hash over the identity + the actual recommendation.
+    """Stable hash over the identity + the actual recommendation.
 
     Inputs are joined with a delimiter that can't appear in any of them
-    (a NUL byte) so distinct field combinations can't collide. SHA-1 is
-    fine here — we are not doing crypto, we just want a short stable
-    key. Returns the first 16 hex chars (8 bytes of digest); collision
-    space of 2^64 is plenty for a per-cluster recommendation set.
+    (a NUL byte) so distinct field combinations can't collide. We use
+    SHA-256 (truncated to 16 hex chars) — not because the threat model
+    needs cryptographic strength, but because security scanners flag
+    SHA-1/MD5 even for non-crypto uses and the cost of using SHA-256
+    here is negligible. Collision space of 2^64 is plenty for a
+    per-cluster recommendation set.
     """
     payload = "\x00".join([namespace, deployment, priority, scaling_approach, recommended_cpu, recommended_mem])
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]  # noqa: S324  -- not crypto
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def load_state(state_dir: str | Path) -> dict[str, Any]:
@@ -70,9 +76,31 @@ def load_state(state_dir: str | Path) -> dict[str, Any]:
         return _empty_state()
     if not isinstance(data, dict) or data.get("schema_version") != STATE_SCHEMA_VERSION:
         return _empty_state()
-    if not isinstance(data.get("fingerprints"), dict):
+    raw_fps = data.get("fingerprints")
+    if not isinstance(raw_fps, dict):
         return _empty_state()
-    return data
+    # Sanitize each entry. The contract is "load never raises", so we
+    # keep only entries that match the expected shape and silently drop
+    # the rest. A malformed file thus degrades to a smaller-but-correct
+    # state rather than crashing merge_run() downstream.
+    sanitized: dict[str, dict[str, Any]] = {}
+    for fp, entry in raw_fps.items():
+        if not isinstance(fp, str) or not isinstance(entry, dict):
+            continue
+        first_seen = entry.get("first_seen")
+        last_seen = entry.get("last_seen")
+        if not isinstance(first_seen, str) or not isinstance(last_seen, str):
+            continue
+        try:
+            count = int(entry.get("count", 1))
+        except (TypeError, ValueError):
+            count = 1
+        sanitized[fp] = {
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "count": max(1, count),
+        }
+    return {"schema_version": STATE_SCHEMA_VERSION, "fingerprints": sanitized}
 
 
 def save_state(state_dir: str | Path, state: dict[str, Any]) -> Path:
