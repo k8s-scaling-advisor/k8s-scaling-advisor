@@ -42,6 +42,10 @@ Uploader sidecar image. Default depends on kind:
   http  -> curlimages/curl:8.10.1
   slack -> curlimages/curl:8.10.1
 Operator can override via .Values.uploader.image.repository / .tag.
+
+If the operator sets a custom repository without a tag, we fail the
+template render rather than silently falling back to `:latest`.
+Reproducibility / rollback safety > convenience.
 */ -}}
 {{- define "k8s-scaling-advisor.uploaderImage" -}}
 {{- $repo := .Values.uploader.image.repository -}}
@@ -55,6 +59,8 @@ Operator can override via .Values.uploader.image.repository / .tag.
     {{- if not $tag }}{{- $tag = "8.10.1" -}}{{- end -}}
   {{- end -}}
 {{- end -}}
-{{- if not $tag }}{{- $tag = "latest" -}}{{- end -}}
+{{- if not $tag -}}
+  {{- fail (printf "uploader.image.tag is required when uploader.image.repository is set (got repository=%q with empty tag). Pin a specific version; refusing to fall back to :latest." $repo) -}}
+{{- end -}}
 {{- printf "%s:%s" $repo $tag -}}
 {{- end -}}

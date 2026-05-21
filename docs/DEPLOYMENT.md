@@ -13,7 +13,7 @@ Use the release workflow to build, scan, sign, and publish:
 
 Security controls in the workflow:
 - SBOM + SLSA provenance attestation via BuildKit (`sbom: true`, `provenance: mode=max`)
-- Trivy vulnerability scan (fails on HIGH/CRITICAL findings)
+- Grype vulnerability scan (fails on HIGH/CRITICAL findings)
 - Keyless Cosign signing with GitHub OIDC identity
 - Signature verification step in CI
 
@@ -29,7 +29,10 @@ docker push ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0
 The image includes:
 - Python runtime
 - project package + `k8s-advisor` CLI
-- `kubectl` (used by Prometheus auto-detection/port-forward flow)
+
+The image does NOT bundle `kubectl` or `curl`. Discovery and (when needed)
+port-forwarding go through the `kubernetes` Python client, so the runtime
+talks directly to the API server.
 
 ## 2) Deploy with Helm
 
@@ -39,7 +42,7 @@ Chart path:
 charts/k8s-scaling-advisor
 ```
 
-### Cluster-wide deployment (default)
+### Namespace-scoped deployment (default)
 
 ```bash
 helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
@@ -50,28 +53,31 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
 
 This creates:
 - `ServiceAccount`
-- `ClusterRole` + `ClusterRoleBinding`
-- `CronJob` running `report --all-namespaces --format md,json` daily
+- namespace-scoped `Role` + `RoleBinding`
+- `CronJob` running `report -n <release-namespace> --format md,json` daily
 
-### Namespace-scoped deployment
+The release namespace is the only namespace the advisor can read. This
+matches the project guideline that the advisor must work with
+namespace-scoped permissions (no cluster-admin required).
 
-When you want the advisor to only scan its own namespace (lower blast
-radius for the credential):
+### Cluster-wide deployment
+
+When you want fleet visibility, flip both `rbac.clusterWide=true` AND
+the args to `--all-namespaces`:
 
 ```bash
 helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   --namespace platform-observability \
   --create-namespace \
   --set image.digest=sha256:<published-digest> \
-  --set rbac.clusterWide=false \
+  --set rbac.clusterWide=true \
   --set-string 'args[0]=report' \
-  --set-string 'args[1]=-n' \
-  --set-string 'args[2]={{ .Release.Namespace }}' \
-  --set-string 'args[3]=--format' \
-  --set-string 'args[4]=md,json'
+  --set-string 'args[1]=--all-namespaces' \
+  --set-string 'args[2]=--format' \
+  --set-string 'args[3]=md,json'
 ```
 
-This uses a namespace-scoped `Role` + `RoleBinding` instead.
+This swaps the namespace-scoped `Role` for a `ClusterRole`/`ClusterRoleBinding`.
 
 ## 3) Prefer immutable digests over tags
 
@@ -220,7 +226,9 @@ kubectl get jobs -n platform-observability --sort-by=.metadata.creationTimestamp
 kubectl logs -n platform-observability job/<job-name>
 ```
 
-If persistence is enabled, reports are also available in the mounted PVC.
+Reports are written to an ephemeral `emptyDir` inside the Job pod and
+disappear when the pod terminates. To retain them, enable the uploader
+sidecar (S3 / Slack / HTTP — see "Uploader sidecar" above).
 
 ## RBAC guidance
 

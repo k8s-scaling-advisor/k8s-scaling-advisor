@@ -495,9 +495,10 @@ def cmd_collect(args):
             print("✗ No data collected", file=sys.stderr)
         sys.exit(1)
 
-    # Create reports directory
-    reports_dir = Path("reports")
-    reports_dir.mkdir(exist_ok=True)
+    # Create reports directory. Honour K8S_ADVISOR_REPORTS_DIR so the chart
+    # can keep `reports.path` and the actual output location in sync.
+    reports_dir = _reports_dir()
+    reports_dir.mkdir(parents=True, exist_ok=True)
 
     # Write CSV with cluster name in filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -568,9 +569,10 @@ def cmd_analyze(args):
     csv_file = args.csv_file
     formats = _parse_formats(args.format)
 
-    # Create reports directory if it doesn't exist
-    reports_dir = Path("reports")
-    reports_dir.mkdir(exist_ok=True)
+    # Create reports directory. Honour K8S_ADVISOR_REPORTS_DIR so the chart
+    # can keep `reports.path` and the actual output location in sync.
+    reports_dir = _reports_dir()
+    reports_dir.mkdir(parents=True, exist_ok=True)
 
     # Use the integrated analyzer
     from k8s_advisor.simple_analyzer import analyze_csv_file
@@ -597,6 +599,16 @@ def cmd_analyze(args):
 
         traceback.print_exc()
         sys.exit(1)
+
+
+def _reports_dir() -> Path:
+    """Resolve the reports output directory.
+
+    Reads ``K8S_ADVISOR_REPORTS_DIR`` so the Helm chart can pin the path
+    (`reports.path`) on the CronJob and have the application write there.
+    Defaults to ``./reports`` for laptop runs.
+    """
+    return Path(os.environ.get("K8S_ADVISOR_REPORTS_DIR") or "reports")
 
 
 def _parse_formats(raw: str) -> tuple:

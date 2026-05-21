@@ -175,6 +175,10 @@ spec:
                 - {{ tpl . $ | quote }}
                 {{- end }}
               env:
+                # Keep app output path aligned with reports.path so the
+                # uploader sidecar finds the files.
+                - name: K8S_ADVISOR_REPORTS_DIR
+                  value: {{ .Values.reports.path | quote }}
                 {{- if .Values.clusterName }}
                 - name: K8S_ADVISOR_CLUSTER
                   value: {{ .Values.clusterName | quote }}
