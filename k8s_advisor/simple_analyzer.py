@@ -206,6 +206,14 @@ class WorkloadAnalysis:
     cpu_delta_m: float = 0.0
     mem_delta_mi: float = 0.0
 
+    # Idempotency / "have we seen this recommendation before" tracking.
+    # Populated only when the analyzer is invoked with `--state-dir`;
+    # otherwise stays at the dataclass defaults so behavior is unchanged.
+    fingerprint: str = ""  # stable hash over (ns, deployment, priority, scaling, rec_cpu, rec_mem)
+    previously_seen: bool = False  # True iff fingerprint was in prior state
+    times_seen: int = 1  # how many runs have produced this exact recommendation
+    first_seen: str = ""  # ISO-8601 timestamp of first observation
+
 
 def safe_float(value, default=0.0):
     """Safely convert to float."""
@@ -1492,8 +1500,22 @@ def analyze_csv_file(
     output_dir: str = "reports",
     generate_graphs: bool = False,
     formats: tuple = ("md",),
+    state_dir: str | None = None,
 ) -> dict:
     """Main analysis function.
+
+    Args:
+        csv_path: Input CSV from `collect`.
+        output_dir: Where to write the markdown / JSON / graphs.
+        generate_graphs: Render PNGs alongside the markdown.
+        formats: Tuple of output formats to write. See SUPPORTED_FORMATS.
+        state_dir: Optional. When set, the analyzer reads/writes
+            ``<state_dir>/seen.json`` to detect recommendations that
+            haven't changed since a previous run. Each WorkloadAnalysis
+            gets ``fingerprint``, ``previously_seen``, ``times_seen``,
+            and ``first_seen`` populated. Downstream uploaders can use
+            this to suppress noise (e.g. "skip a Slack post if the
+            recommendation is unchanged from last week").
 
     Returns a dict mapping each requested format ("md", "json") to its
     output path. Backwards-compatible: if a single-format tuple is passed,
@@ -1535,6 +1557,41 @@ def analyze_csv_file(
         analyses.append(analysis)
 
     print(f"✅ Analyzed {len(analyses)} workloads")
+
+    # Idempotency: if a state directory was provided, fingerprint each
+    # recommendation and tag whether it appeared in any previous run.
+    # No-op when state_dir is None — keeps the legacy code path identical.
+    if state_dir:
+        from k8s_advisor.idempotency import fingerprint as _fp
+        from k8s_advisor.idempotency import load_state, merge_run, save_state
+
+        prior = load_state(state_dir)
+        prior_fps = prior.get("fingerprints") or {}
+        run_fps: list = []
+        for a in analyses:
+            fp = _fp(
+                namespace=a.namespace,
+                deployment=a.deployment,
+                priority=a.priority.value,
+                scaling_approach=a.scaling_approach.value,
+                recommended_cpu=a.recommended_cpu,
+                recommended_mem=a.recommended_mem,
+            )
+            a.fingerprint = fp
+            run_fps.append(fp)
+            prior_entry = prior_fps.get(fp)
+            if prior_entry is not None:
+                a.previously_seen = True
+                a.first_seen = prior_entry.get("first_seen", "")
+                # `times_seen` reflects the count *including* this run,
+                # which is what an operator wants in the report ("seen 3
+                # times"). After merge_run the entry's count will be N+1
+                # for an N-prior workload; we set times_seen to that.
+                a.times_seen = int(prior_entry.get("count", 0)) + 1
+        new_state = merge_run(prior, run_fps)
+        path = save_state(state_dir, new_state)
+        repeats = sum(1 for a in analyses if a.previously_seen)
+        print(f"🔁 Idempotency: {repeats} of {len(analyses)} workloads repeat prior run; state at {path}")
 
     # Generate graphs if requested. We render from the in-memory analyses
     # (not from the CSV) so the visualizer shares the analyzer's source of
