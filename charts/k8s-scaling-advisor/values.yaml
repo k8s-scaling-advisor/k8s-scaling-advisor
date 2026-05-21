@@ -46,17 +46,13 @@ cronjob:
   restartPolicy: Never
 
 # Ad-hoc debug mode for fetching reports out of a finished pod.
-# The runtime image is distroless (no shell), so a Completed pod can't
-# be exec'd into. Setting this `true` makes the main container sleep
-# after the run finishes so you have time to attach an ephemeral debug
-# container and `cp` files out:
+# By default, a Job pod that finishes its work is reaped quickly and
+# its emptyDir (where reports live) goes with it. Setting `keepAlive`
+# to true makes the main container sleep for `keepAliveSeconds` after
+# the analysis completes so you have a window to copy files out:
 #
-#   kubectl debug -n <ns> <pod> --image=busybox \
-#     --share-processes --target=advisor -- /bin/sh
-#   # in the debug container:
-#   cp /proc/$(pgrep python)/root/app/reports/* /tmp/out/
-#   exit
-#   kubectl cp <ns>/<pod>:/tmp/out ./reports -c debugger
+#   kubectl exec -n <ns> <pod> -- ls /app/reports
+#   kubectl cp -n <ns> <pod>:/app/reports ./local-reports
 #
 # Production should leave this off and use the uploader sidecar instead.
 debug:

@@ -167,27 +167,23 @@ spec:
               securityContext:
                 {{- toYaml .Values.containerSecurityContext | nindent 16 }}
               {{- if .Values.debug.keepAlive }}
-              # Debug mode: run the advisor, then sleep so an ephemeral
-              # debug container can be attached and report files copied
-              # out. Distroless has Python but no shell, so we drive the
-              # whole thing from python -c. Production should leave
-              # debug.keepAlive=false and use the uploader sidecar.
+              # Debug mode: run the advisor, then sleep so an operator
+              # can `kubectl exec` / `kubectl cp` the reports before the
+              # pod terminates. Production should leave debug.keepAlive
+              # off and use the uploader sidecar instead.
               command:
-                - python3
-              args:
+                - /bin/sh
                 - "-c"
+              args:
                 - |
-                  import os, runpy, sys, time
-                  sys.argv = ["k8s-advisor"] + {{ .Values.args | toJson }}
-                  rc = 0
-                  try:
-                      runpy.run_module("k8s_advisor.cli", run_name="__main__")
-                  except SystemExit as e:
-                      rc = int(getattr(e, "code", 0) or 0)
-                  print(f"[debug] advisor exited rc={rc}; sleeping {{ .Values.debug.keepAliveSeconds }}s for debug attach")
-                  print("[debug] kubectl debug <pod> --image=busybox --share-processes --target=advisor -- /bin/sh")
-                  time.sleep({{ .Values.debug.keepAliveSeconds }})
-                  sys.exit(rc)
+                  set +e
+                  k8s-advisor {{ range .Values.args }}{{ . | quote }} {{ end }}
+                  rc=$?
+                  echo "[debug] advisor exited rc=$rc; sleeping {{ .Values.debug.keepAliveSeconds }}s for kubectl exec / kubectl cp"
+                  echo "[debug] kubectl exec -n $POD_NAMESPACE $POD_NAME -- ls /app/reports"
+                  echo "[debug] kubectl cp -n $POD_NAMESPACE $POD_NAME:/app/reports ./local-reports"
+                  sleep {{ .Values.debug.keepAliveSeconds }}
+                  exit $rc
               {{- else }}
               command:
                 {{- range .Values.command }}
@@ -206,6 +202,18 @@ spec:
                 {{- if .Values.clusterName }}
                 - name: K8S_ADVISOR_CLUSTER
                   value: {{ .Values.clusterName | quote }}
+                {{- end }}
+                {{- if .Values.debug.keepAlive }}
+                # Surface the pod identity so the debug-mode banner
+                # prints copy/pasteable kubectl commands.
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
                 {{- end }}
                 {{- with .Values.extraEnv }}
                 {{- toYaml . | nindent 16 }}

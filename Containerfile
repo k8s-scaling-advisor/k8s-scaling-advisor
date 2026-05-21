@@ -18,11 +18,13 @@ WORKDIR /app
 # `kubernetes` Python client (see k8s_advisor/collector/prometheus.py).
 # Reduces image size and the supply-chain surface to just Python deps.
 #
-# Vuln-scanning strategy: Grype runs at release-time and on a daily cron
-# (.github/workflows/cve-scan.yml). New fixed HIGH/CRITICAL findings open
-# an issue rather than blocking releases — the same alert-driven pattern
-# Dependabot uses for Python deps. See SECURITY-SCANNING.md (or the
-# release workflow comments) for details.
+# Vuln-scanning strategy: Grype runs at release-time as a strict gate
+# (release-image.yml fails on any fixed HIGH/CRITICAL) and on a daily
+# cron (.github/workflows/cve-scan.yml) against the published image —
+# new fixed HIGH/CRITICAL findings post-release open a tracking issue
+# instead of blocking, since we don't control the upstream rebuild
+# cadence. See the comment headers in those two workflow files for the
+# rationale.
 
 COPY requirements.txt requirements-viz.txt ./
 RUN pip install -r requirements.txt -r requirements-viz.txt

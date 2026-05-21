@@ -227,10 +227,11 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
 
 ## 7) Debug mode: fetch reports from a finished pod
 
-The runtime image is distroless (no shell), so a `Completed` pod can't
-be `kubectl exec`'d into. For ad-hoc inspection, set
+A Job pod that finishes its work is reaped quickly and its `emptyDir`
+(where reports live) goes with it. For ad-hoc inspection, set
 `debug.keepAlive=true` and the main container will sleep for 30 minutes
-(configurable via `debug.keepAliveSeconds`) after writing the reports.
+(configurable via `debug.keepAliveSeconds`) after writing the reports,
+so you have a window to `kubectl exec` / `kubectl cp` them out.
 
 ```bash
 helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
@@ -239,25 +240,18 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   --set debug.keepAlive=true
 ```
 
-While the pod is in the sleep phase, attach a busybox debug container
-and copy the reports out via the shared process namespace:
+The pod's stdout will print `kubectl` commands with the resolved pod
+name once the analysis finishes:
 
 ```bash
-# 1. Find the job's pod
-POD=$(kubectl get pods -n platform-observability \
-  -l batch.kubernetes.io/job-name=<your-job> \
-  -o jsonpath='{.items[0].metadata.name}')
+# Look at the live log to find the recipe
+kubectl logs -n platform-observability -l app.kubernetes.io/name=k8s-scaling-advisor
 
-# 2. Inject a debugger that copies reports to its own /tmp/out
-kubectl debug -n platform-observability "$POD" \
-  --image=busybox --share-processes --target=advisor \
-  --container=debugger --quiet \
-  -- sh -c 'cp -r /proc/$(pidof python3)/root/app/reports /tmp/out && \
-            ls /tmp/out && sleep 600' &
+# It prints something like:
+# [debug] kubectl exec -n platform-observability k8s-advisor-...-abc12 -- ls /app/reports
+# [debug] kubectl cp -n platform-observability k8s-advisor-...-abc12:/app/reports ./local-reports
 
-# 3. Pull the files out
-kubectl cp -n platform-observability \
-  "$POD":/tmp/out ./local-reports -c debugger
+# Run those, and the reports land locally.
 ```
 
 This is intentionally manual — production should use the
