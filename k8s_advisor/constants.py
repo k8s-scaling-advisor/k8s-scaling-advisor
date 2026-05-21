@@ -335,3 +335,42 @@ K8S_VPA_IN_PLACE_MIN_VERSION = "1.33"
 
 DEFAULT_PROMETHEUS_TIME_RANGE = "7d"  # 7 days of historical data
 DEFAULT_PROMETHEUS_PORT = 9091  # Local port-forward port
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Recommendation Confidence Scoring
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# These tune `_confidence_score()` in simple_analyzer.py. The score is a
+# heuristic 0.0–1.0 rollup of the analyzer's data-quality signals so
+# downstream tooling can gate ("only auto-act on >= HIGH_CONF_THRESHOLD").
+# Pick a base by Prometheus availability, subtract penalties for noisy
+# signals, add a small bonus when limits are set, clamp into [0.0, 1.0],
+# then bucket into bands.
+
+# Hard floor when INSUFFICIENT_DATA is set — no other heuristic can
+# salvage a recommendation built on missing/misleading data.
+INSUFFICIENT_DATA_SCORE = 0.10
+
+# Base score by data source.
+BASE_SCORE_PROMETHEUS = 0.85
+BASE_SCORE_NO_PROM = 0.55
+
+# Penalties applied to the base score (subtracted).
+BURSTY_PENALTY = 0.20  # peaks not captured (Cassandra/Kafka/etc.)
+GC_PENALTY = 0.15  # JVM/Node — memory shape distorted
+RESTART_PENALTY = 0.15  # crash-loop noise contaminates metrics
+SINGLE_REPLICA_PENALTY = 0.05  # no peer averaging
+
+# Threshold above which restart_rate is treated as crash-loop noise
+# (per day). Mirrors UNSTABLE_RESTART_RATE_THRESHOLD intentionally — same
+# "this is too unstable to trust the metrics" line in the sand.
+RESTART_RATE_THRESHOLD = 2.0
+
+# Bonus when both CPU and memory limits are set — saturation is then
+# observable through metrics-server, so the data we have is more
+# meaningful even without Prometheus.
+LIMITS_BONUS = 0.05
+
+# Band boundaries on the final clamped score.
+HIGH_CONF_THRESHOLD = 0.75
+MEDIUM_CONF_THRESHOLD = 0.50

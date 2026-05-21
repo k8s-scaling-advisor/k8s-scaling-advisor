@@ -16,22 +16,30 @@ from pathlib import Path
 # Import constants
 try:
     from k8s_advisor.constants import (
+        BASE_SCORE_NO_PROM,
+        BASE_SCORE_PROMETHEUS,
+        BURSTY_PENALTY,
         BURSTY_WORKLOAD_PATTERNS,
         CPU_MIN_RECOMMENDED_M,
         CPU_OVER_REQUESTED_THRESHOLD,
         CPU_REDUCTION_BASELINE_M,
         CPU_REDUCTION_MIN_SAVING_M,
         CPU_UNDER_REQUESTED_THRESHOLD,
+        GC_PENALTY,
         GC_RUNTIME_PATTERNS,
         HEADROOM_MULTIPLIER,
         HEADROOM_MULTIPLIER_HIGH_VOLATILITY,
         HEADROOM_MULTIPLIER_MID_VOLATILITY,
+        HIGH_CONF_THRESHOLD,
         HPA_TARGET_UTILIZATION_DEFAULT,
+        INSUFFICIENT_DATA_SCORE,
+        LIMITS_BONUS,
         LOW_CONFIDENCE_MAX_RESTARTS_PER_POD,
         LOW_CONFIDENCE_RESTART_RATE_PER_DAY,
         LOW_CONFIDENCE_TOTAL_RESTARTS,
         LOW_SIGNAL_CPU_M,
         LOW_SIGNAL_MEM_MI,
+        MEDIUM_CONF_THRESHOLD,
         MEM_OVER_REQUESTED_THRESHOLD,
         MEM_SATURATION_LIMIT_THRESHOLD,
         MEM_UNDER_REQUESTED_THRESHOLD,
@@ -40,6 +48,9 @@ try:
         OWNER_LABEL_KEYS,
         REQUESTS_NOT_SET_P0_CPU_M,
         REQUESTS_NOT_SET_P0_MEM_MI,
+        RESTART_PENALTY,
+        RESTART_RATE_THRESHOLD,
+        SINGLE_REPLICA_PENALTY,
         UNSTABLE_RESTART_RATE_THRESHOLD,
         UNSTABLE_RESTART_THRESHOLD,
     )
@@ -77,6 +88,18 @@ except ImportError:
     )
     GC_RUNTIME_PATTERNS = set()
     BURSTY_WORKLOAD_PATTERNS = set()
+    # Confidence-scoring fallbacks (must mirror constants.py defaults).
+    INSUFFICIENT_DATA_SCORE = 0.10
+    BASE_SCORE_PROMETHEUS = 0.85
+    BASE_SCORE_NO_PROM = 0.55
+    BURSTY_PENALTY = 0.20
+    GC_PENALTY = 0.15
+    RESTART_PENALTY = 0.15
+    SINGLE_REPLICA_PENALTY = 0.05
+    RESTART_RATE_THRESHOLD = 2.0
+    LIMITS_BONUS = 0.05
+    HIGH_CONF_THRESHOLD = 0.75
+    MEDIUM_CONF_THRESHOLD = 0.50
 
 
 class Priority(Enum):
@@ -230,31 +253,31 @@ def _confidence_score(
     if insufficient_data:
         # Floor: when the data itself is missing/misleading no scoring
         # heuristic recovers it.
-        return (0.10, "low", ["INSUFFICIENT_DATA — no usable signal"])
+        return (INSUFFICIENT_DATA_SCORE, "low", ["INSUFFICIENT_DATA — no usable signal"])
 
-    score = 0.85 if has_prometheus else 0.55
+    score = BASE_SCORE_PROMETHEUS if has_prometheus else BASE_SCORE_NO_PROM
     reasons.append("Prometheus metrics available" if has_prometheus else "kubectl-only metrics-server data")
 
     if bursty_workload:
-        score -= 0.20
+        score -= BURSTY_PENALTY
         reasons.append("bursty runtime — peaks under-represented")
     if gc_runtime:
-        score -= 0.15
+        score -= GC_PENALTY
         reasons.append("GC-managed runtime — memory shape distorted")
-    if restart_rate > 2.0:
-        score -= 0.15
+    if restart_rate > RESTART_RATE_THRESHOLD:
+        score -= RESTART_PENALTY
         reasons.append(f"restart rate {restart_rate:.1f}/day — metrics include crash-loop noise")
     if pod_count <= 1:
-        score -= 0.05
+        score -= SINGLE_REPLICA_PENALTY
         reasons.append("single replica — no peer averaging")
     if has_cpu_limit and has_mem_limit:
-        score += 0.05
+        score += LIMITS_BONUS
         reasons.append("CPU + memory limits set — saturation observable")
 
     score = max(0.0, min(1.0, score))
-    if score >= 0.75:
+    if score >= HIGH_CONF_THRESHOLD:
         band = "high"
-    elif score >= 0.50:
+    elif score >= MEDIUM_CONF_THRESHOLD:
         band = "medium"
     else:
         band = "low"
