@@ -1,6 +1,7 @@
 """Unit tests for issue detection logic."""
-from k8s_advisor.analyzer.models import DeploymentAnalysis, Priority, IssueType
+
 from k8s_advisor.analyzer.detector import detect_issues
+from k8s_advisor.analyzer.models import DeploymentAnalysis, IssueType, Priority
 
 
 class TestDetectIssues:

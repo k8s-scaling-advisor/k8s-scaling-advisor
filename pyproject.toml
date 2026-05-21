@@ -10,14 +10,40 @@ select = [
     "I",    # isort
     "B",    # flake8-bugbear
     "UP",   # pyupgrade
+    "S",    # flake8-bandit (security)
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
 ]
 ignore = [
-    "E501",  # line too long (handled by formatter)
+    "E501",    # line too long (handled by formatter)
+    "S101",    # use of assert — pytest tests rely on assert
+    "S311",    # random for jitter in retry backoff (not crypto)
+    "S603",    # subprocess call: review with shell=False fix already in place
+    "S607",    # starting process with partial path — kubectl/gpg/git are PATH-resolved by design
+    "SIM108",  # ternary instead of if-else — situational; readability often wins
+    # ── Unicode diagnostics ───────────────────────────────────────────────
+    # Report templates, documentation, and admin-readable strings use Unicode
+    # punctuation (×, em/en dash, curly quotes) intentionally. Disabling these
+    # globally keeps the diff out of every PR review.
+    "RUF001",  # ambiguous unicode in string
+    "RUF002",  # ambiguous unicode in docstring
+    "RUF003",  # ambiguous unicode in comment
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["B011"]
-"e2e/*" = ["B011"]
+# Tests and smoke scripts use plain assert; we already exclude S101 globally
+# but tests also use B011 (assert False) intentionally.
+"tests/*"   = ["B011", "S"]
+"e2e/*"     = ["B011", "S"]
+"scripts/*" = ["S"]
+# detector.py: nested ifs are deliberately explicit for readability of the
+# multi-condition throttle/saturation rules — collapsing into one `and`
+# expression hurts review more than it helps.
+"k8s_advisor/analyzer/detector.py" = ["SIM102"]
+# kubernetes.py: best-effort fallback paths (cluster name lookup, PVC
+# access-mode probe) intentionally swallow exceptions — the function
+# returns a sentinel that callers handle.
+"k8s_advisor/collector/kubernetes.py" = ["S110", "S112"]
 
 [tool.ruff.format]
 quote-style = "double"

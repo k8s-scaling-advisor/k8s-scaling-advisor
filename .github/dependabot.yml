@@ -1,5 +1,11 @@
 # Dependabot configuration.
 # Reference: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Strategy: open weekly PRs for security and patch/minor updates only.
+# Floors in requirements*.txt are intentional — they're the minimum version
+# we test against, not the version you must run. Major-version bumps would
+# need code changes anyway, so we don't ask Dependabot to file PRs that
+# can't merge cleanly.
 version: 2
 
 updates:
@@ -18,13 +24,26 @@ updates:
     commit-message:
       prefix: "deps"
       include: scope
+
+    # Don't open PRs for major-version bumps. Major versions almost
+    # always need code changes; Dependabot can't validate them.
+    # Use `npm run upgrade-deps` (or equivalent) for intentional bumps.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+    # Group remaining patch+minor updates into one PR per ecosystem so
+    # we don't get 5 PRs the same morning.
     groups:
       patch-and-minor:
         update-types:
           - "patch"
           - "minor"
 
-  # GitHub Actions used in workflows
+  # GitHub Actions used in workflows.
+  # Action major-version bumps are usually safe (well-maintained, semver-honoring),
+  # so we DO accept them here — different policy from Python deps because
+  # actions are only used at CI-time, not runtime.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -40,7 +59,8 @@ updates:
       prefix: "ci"
       include: scope
     groups:
-      actions-patch-and-minor:
+      actions-all:
         update-types:
           - "patch"
           - "minor"
+          - "major"

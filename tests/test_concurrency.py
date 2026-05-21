@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 import k8s_advisor.collector.prometheus as prom
 
 
@@ -26,8 +24,7 @@ class _FakeResponse:
 
 
 def test_retry_returns_immediately_on_200():
-    with patch("requests.get") as fake_get, \
-            patch.object(prom.time, "sleep"):
+    with patch("requests.get") as fake_get, patch.object(prom.time, "sleep"):
         fake_get.return_value = _FakeResponse(200)
         out = prom._request_with_retry("http://x", {"q": "up"})
         assert out is not None
@@ -36,8 +33,7 @@ def test_retry_returns_immediately_on_200():
 
 
 def test_retry_backs_off_on_429_then_succeeds():
-    with patch("requests.get") as fake_get, \
-            patch.object(prom.time, "sleep") as fake_sleep:
+    with patch("requests.get") as fake_get, patch.object(prom.time, "sleep") as fake_sleep:
         fake_get.side_effect = [
             _FakeResponse(429),
             _FakeResponse(429),
@@ -51,8 +47,7 @@ def test_retry_backs_off_on_429_then_succeeds():
 
 
 def test_retry_gives_up_after_max_attempts():
-    with patch("requests.get") as fake_get, \
-            patch.object(prom.time, "sleep"):
+    with patch("requests.get") as fake_get, patch.object(prom.time, "sleep"):
         fake_get.return_value = _FakeResponse(503)
         out = prom._request_with_retry("http://x", {"q": "up"}, max_attempts=3)
         # We get the last response back so the caller can inspect status.
@@ -63,8 +58,8 @@ def test_retry_gives_up_after_max_attempts():
 
 def test_retry_handles_connection_error():
     import requests as real_requests
-    with patch("requests.get") as fake_get, \
-            patch.object(prom.time, "sleep"):
+
+    with patch("requests.get") as fake_get, patch.object(prom.time, "sleep"):
         fake_get.side_effect = [
             real_requests.RequestException("connection refused"),
             _FakeResponse(200),
@@ -77,8 +72,8 @@ def test_retry_handles_connection_error():
 
 def test_retry_returns_none_after_persistent_connection_error():
     import requests as real_requests
-    with patch("requests.get") as fake_get, \
-            patch.object(prom.time, "sleep"):
+
+    with patch("requests.get") as fake_get, patch.object(prom.time, "sleep"):
         fake_get.side_effect = real_requests.RequestException("network down")
         out = prom._request_with_retry("http://x", {"q": "up"}, max_attempts=3)
         assert out is None
@@ -117,6 +112,7 @@ def test_collect_subcommand_accepts_concurrency_flag():
 
 def test_auto_concurrency_selection():
     """Default behavior when -c is not passed: parallel above 25 workloads."""
+
     def auto(user_value, total_workloads):
         if user_value is None:
             return 8 if total_workloads >= 25 else 1
@@ -129,13 +125,14 @@ def test_auto_concurrency_selection():
     assert auto(None, 25) == 8
     assert auto(None, 288) == 8
     # User-specified always wins.
-    assert auto(1, 1000) == 1     # explicit serial debug mode
-    assert auto(16, 5) == 16      # explicit parallel on tiny cluster
-    assert auto(64, 100) == 32    # clamped to 32
+    assert auto(1, 1000) == 1  # explicit serial debug mode
+    assert auto(16, 5) == 16  # explicit parallel on tiny cluster
+    assert auto(64, 100) == 32  # clamped to 32
 
 
 def test_concurrency_clamped_to_safe_range():
     """The runtime guard in cmd_collect uses max(1, min(32, value or 8))."""
+
     def clamp(v):
         return max(1, min(32, v or 8))
 

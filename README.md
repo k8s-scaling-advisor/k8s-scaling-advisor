@@ -9,6 +9,14 @@ It supports two analysis modes:
 
 The report structure stays consistent in both modes.
 
+## Start Here
+
+- New user quickstart: `docs/GETTING_STARTED.md`
+- Container/Helm deployment: `docs/DEPLOYMENT.md`
+- Secure image release workflow: `.github/workflows/release-image.yml`
+- Offline sample walkthrough: `examples/README.md`
+- Contributor guide: `CONTRIBUTING.md`
+
 ## What It Does
 
 - Collects per-workload CPU/memory requests, limits, usage, restart, HPA, PVC, and metadata into CSV
@@ -128,7 +136,12 @@ k8s-advisor report --namespace-pattern 'app-*' --graphs
 
 ```text
 k8s-scaling-advisor/
+├── Containerfile                    # container image build recipe
+├── charts/k8s-scaling-advisor/      # Helm chart (CronJob + RBAC)
 ├── main.py                         # CLI command orchestration
+├── docs/
+│   ├── GETTING_STARTED.md          # quick onboarding + first run
+│   └── DEPLOYMENT.md               # Docker + Helm deployment guide
 ├── k8s_advisor/
 │   ├── cli.py                      # console entry point
 │   ├── constants.py                # thresholds/guardrails
