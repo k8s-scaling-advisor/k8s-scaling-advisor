@@ -203,20 +203,57 @@ jobs:
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
+          EVENT_NAME: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+          IMAGE_REPO: ${{ steps.vars.outputs.image_repo }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          set -eu
           OWNER_LC="$(printf '%s' "${REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           CHART_REPO_OCI="oci://${REGISTRY}/${OWNER_LC}/charts"
-          CHART_VERSION="$(awk '/^version:/ {print $2; exit}' charts/k8s-scaling-advisor/Chart.yaml)"
-          # On a tag push, sync the chart version to the tag so users can ask
-          # for `--version v1.2.3` directly.
-          if [ "${REF_TYPE}" = "tag" ]; then
-            CHART_VERSION="${REF_NAME#v}"
-            sed -i "s/^version:.*/version: ${CHART_VERSION}/" charts/k8s-scaling-advisor/Chart.yaml
+          CHART_DIR="charts/k8s-scaling-advisor"
+          CHART_YAML="${CHART_DIR}/Chart.yaml"
+          VALUES_YAML="${CHART_DIR}/values.yaml"
+
+          CHART_VERSION="$(awk '/^version:/ {print $2; exit}' "${CHART_YAML}")"
+
+          # Decide whether this run is a "real" tagged release. Both
+          # `push: tags` (manual `git tag && git push --tags`) and
+          # `workflow_run` from auto-tag-on-release-label.yml count.
+          IS_TAG_RELEASE="false"
+          if [ "${REF_TYPE}" = "tag" ] || [ "${EVENT_NAME}" = "workflow_run" ]; then
+            IS_TAG_RELEASE="true"
           fi
+
+          # ─── Mutations to the runner's checkout (NOT committed back) ───
+          # The `.tgz` we publish reflects these edits; the source tree
+          # on `main` keeps its empty defaults so contributors aren't
+          # forever rebasing past auto-edits.
+
+          if [ "${IS_TAG_RELEASE}" = "true" ]; then
+            # Tagged release: chart version + appVersion sync to the tag.
+            # Pin image.tag so default `helm install` lands on the
+            # human-readable semver. Leave image.digest empty — the tag
+            # is itself the durable artifact.
+            CHART_VERSION="${IMAGE_TAG}"
+            sed -i "s|^version:.*|version: ${CHART_VERSION}|" "${CHART_YAML}"
+            sed -i "s|^appVersion:.*|appVersion: \"${CHART_VERSION}\"|" "${CHART_YAML}"
+            sed -i "s|^  tag: .*|  tag: \"${IMAGE_TAG}\"|" "${VALUES_YAML}"
+            sed -i "s|^  digest: .*|  digest: \"\"|" "${VALUES_YAML}"
+            echo "::notice::Tagged release: chart pinned to image.tag=${IMAGE_TAG}"
+          else
+            # Ad-hoc workflow_dispatch rebuild: no semver to point at.
+            # Pin image.digest so the chart is still reproducible; leave
+            # image.tag empty so it doesn't conflict with the digest.
+            sed -i "s|^  tag: .*|  tag: \"\"|" "${VALUES_YAML}"
+            sed -i "s|^  digest: .*|  digest: \"${IMAGE_DIGEST}\"|" "${VALUES_YAML}"
+            echo "::notice::Non-release rebuild: chart pinned to image.digest=${IMAGE_DIGEST}"
+          fi
+
           echo "${REGISTRY_TOKEN}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USER}" --password-stdin
-          helm package charts/k8s-scaling-advisor --destination ./.chart-out
+          helm package "${CHART_DIR}" --destination ./.chart-out
           helm push "./.chart-out/k8s-scaling-advisor-${CHART_VERSION}.tgz" "${CHART_REPO_OCI}"
           {
             echo "chart_version=${CHART_VERSION}"
