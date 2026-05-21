@@ -177,7 +177,7 @@ spec:
               args:
                 - |
                   set +e
-                  k8s-advisor {{ range .Values.args }}{{ . | quote }} {{ end }}
+                  k8s-advisor{{- range .Values.args }} {{ tpl . $ | quote }}{{- end }}
                   rc=$?
                   echo "[debug] advisor exited rc=$rc; sleeping {{ .Values.debug.keepAliveSeconds }}s for kubectl exec / kubectl cp"
                   echo "[debug] kubectl exec -n $POD_NAMESPACE $POD_NAME -- ls /app/reports"
