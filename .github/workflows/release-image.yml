@@ -10,6 +10,15 @@ on:
         description: "Optional image tag override (default: git tag/SHA)"
         required: false
         type: string
+  # Triggered by `auto-tag-on-release-label.yml` after it pushes a tag.
+  # Required because tag pushes performed via the runner's GITHUB_TOKEN
+  # do NOT trigger downstream workflows (documented GitHub safeguard).
+  # `workflow_run` runs in the default branch's context — the job
+  # below resolves the actual tag at runtime via `git for-each-ref`.
+  workflow_run:
+    workflows: ["Auto-tag merged release PR"]
+    types: [completed]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,6 +34,12 @@ env:
 jobs:
   build-sign-publish:
     name: Build, scan, sign, publish image
+    # Skip when the upstream auto-tag workflow failed or didn't push a tag.
+    # For `push: tags` and `workflow_dispatch` events, this expression
+    # evaluates to true (no triggering_workflow.conclusion to compare).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,10 +51,16 @@ jobs:
       image_digest: ${{ steps.export.outputs.image_digest }}
       chart_ref: ${{ steps.export.outputs.chart_ref }}
       chart_version: ${{ steps.export.outputs.chart_version }}
+      release_tag: ${{ steps.vars.outputs.image_tag }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Need full history + tags so the workflow_run path can
+          # resolve the most-recent v* tag the auto-tag workflow just
+          # pushed. Cheap; fetched once per release run.
+          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
@@ -57,15 +78,33 @@ jobs:
       - name: Compute release variables
         id: vars
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_TAG: ${{ github.event.inputs.tag || '' }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
         run: |
+          # Three trigger paths:
+          #   1. workflow_dispatch with `tag` input -> use it verbatim.
+          #   2. push: tags     -> derive from the pushed tag's name.
+          #   3. workflow_run   -> resolve the most-recent v* tag (the
+          #                       auto-tag workflow just pushed it).
           if [ -n "${INPUT_TAG}" ]; then
             IMAGE_TAG="${INPUT_TAG}"
           elif [ "${REF_TYPE}" = "tag" ]; then
             IMAGE_TAG="${REF_NAME#v}"
+          elif [ "${EVENT_NAME}" = "workflow_run" ]; then
+            # Fetch tags fresh in case the upstream push raced ours.
+            git fetch --tags --force origin >/dev/null 2>&1
+            LATEST_TAG="$(git for-each-ref --sort=-creatordate --format='%(refname:short)' --count=1 'refs/tags/v*')"
+            if [ -z "${LATEST_TAG}" ]; then
+              echo "::error::workflow_run trigger but no v* tag found"
+              exit 1
+            fi
+            # Check out the tag so the build is reproducible against
+            # the tagged tree, not whatever main happens to be now.
+            git checkout "${LATEST_TAG}"
+            IMAGE_TAG="${LATEST_TAG#v}"
           else
             IMAGE_TAG="${SHA::12}"
           fi
@@ -202,7 +241,10 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: build-sign-publish
-    if: github.ref_type == 'tag'
+    # Run on real tag pushes AND on workflow_run from auto-tag (where
+    # the build job resolved the tag at runtime). Skip on
+    # workflow_dispatch — those are ad-hoc rebuilds, not Releases.
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_run'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -215,10 +257,16 @@ jobs:
           CHART_REF: ${{ needs.build-sign-publish.outputs.chart_ref }}
           CHART_VERSION: ${{ needs.build-sign-publish.outputs.chart_version }}
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          # `release_tag` is the un-prefixed version that the build job
+          # resolved (handles all three trigger paths). Prefix with `v`
+          # for tag_name / Release name below.
+          VERSION: ${{ needs.build-sign-publish.outputs.release_tag }}
           REGISTRY_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          VERSION="${TAG#v}"
+          TAG="v${VERSION}"
+          {
+            echo "tag=${TAG}"
+          } >> "${GITHUB_OUTPUT}"
           {
             echo "## Container image"
             echo
@@ -274,8 +322,8 @@ jobs:
       - name: Publish Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ steps.notes.outputs.tag }}
+          name: ${{ steps.notes.outputs.tag }}
           body_path: ${{ steps.notes.outputs.body_path }}
           generate_release_notes: true
           fail_on_unmatched_files: true

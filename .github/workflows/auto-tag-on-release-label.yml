@@ -87,5 +87,11 @@ jobs:
           # `git tag -m` free of any operator-controlled string. Anyone
           # browsing the tag can click through to the PR for context.
           git tag -a "${TAG}" -m "Release ${TAG} (PR #${PR_NUMBER})"
+          # Note: tag pushes performed via the runner's GITHUB_TOKEN do
+          # NOT trigger downstream workflows (documented GitHub safeguard
+          # against infinite-loop chains). The release-image.yml workflow
+          # has a `workflow_run` trigger keyed on this workflow's
+          # successful completion — that's how the build/publish step is
+          # invoked, not via the tag push event itself.
           git push origin "${TAG}"
-          echo "::notice::Pushed ${TAG} — release-image.yml will now build & publish."
+          echo "::notice::Pushed ${TAG} — release-image.yml will fire via workflow_run."
