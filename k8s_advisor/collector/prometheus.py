@@ -335,6 +335,8 @@ def find_prometheus_service_from_crds() -> dict[str, Any] | None:
             if svc:
                 return svc
     except (ApiException, Exception):
+        # CRD lookup is best-effort; on any failure we drop through to
+        # the service-name search below so detection has a fallback path.
         pass
     # Fallback: search all services
     services = find_all_services_with_prometheus()
@@ -428,6 +430,9 @@ class _LocalPortForward:
         try:
             self._listener.close()
         except Exception:
+            # The listener may already be closed (double-stop), or in a
+            # broken state from a kernel-level error. Either way there's
+            # nothing the caller can do — `stop()` is best-effort cleanup.
             pass
 
 
@@ -543,13 +548,22 @@ def start_port_forward(
                         try:
                             pf.close()
                         except Exception:
+                            # PortForward.close() can fail if the upstream
+                            # stream is already torn down; we're already in a
+                            # cleanup path, so swallow and continue.
                             pass
                 except Exception:
+                    # Any failure setting up the port-forward (auth,
+                    # network, pod went away) just kills this proxy
+                    # thread; the next client connect will retry from
+                    # scratch via the accept loop.
                     return
                 finally:
                     try:
                         conn.close()
                     except Exception:
+                        # Local socket may already be closed by the peer
+                        # (Prometheus client disconnect) — nothing to do.
                         pass
 
             threading.Thread(target=_proxy, daemon=True).start()
