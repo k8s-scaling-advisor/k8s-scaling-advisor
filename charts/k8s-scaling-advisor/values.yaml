@@ -22,9 +22,13 @@ serviceAccount:
 
 rbac:
   create: true
-  # false = namespace-scoped Role/RoleBinding (only the release namespace)
-  # true  = cluster-wide ClusterRole/ClusterRoleBinding (all namespaces)
-  clusterWide: true
+  # false = namespace-scoped Role/RoleBinding (only the release namespace).
+  #         This is the default and matches the project guideline that the
+  #         advisor must run with namespace-scoped permissions.
+  # true  = cluster-wide ClusterRole/ClusterRoleBinding (all namespaces).
+  #         If you flip this on, also flip `args` to `--all-namespaces` (or
+  #         pass an explicit list of namespaces with -n).
+  clusterWide: false
 
 cronjob:
   enabled: true
@@ -41,20 +45,16 @@ cronjob:
 command:
   - k8s-advisor
 
-# Default to all-namespaces with cluster-wide RBAC. Narrow by overriding:
-#
-#   args:
-#     - report
-#     - -n
-#     - my-namespace
-#     - --format
-#     - md,json
+# Default: scan only the release namespace, matching the namespace-scoped
+# RBAC default above. To go cluster-wide, set `rbac.clusterWide=true` AND
+# override these args with `--all-namespaces` (or list namespaces with -n).
 #
 # Strings are passed through `tpl` so values like "{{ .Release.Namespace }}"
 # render at install time.
 args:
   - report
-  - --all-namespaces
+  - -n
+  - "{{ .Release.Namespace }}"
   - --format
   - md,json
 

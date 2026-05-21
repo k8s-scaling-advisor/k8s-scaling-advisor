@@ -22,6 +22,7 @@ setup(
     install_requires=[
         "kubernetes>=12.0.1",  # For K8s API access
         "jinja2>=3.1.6",  # For markdown report templating
+        "requests>=2.32.0",  # For Prometheus HTTP queries
     ],
     # Ship the Jinja templates with the package.
     include_package_data=True,

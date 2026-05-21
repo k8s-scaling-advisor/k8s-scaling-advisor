@@ -342,7 +342,8 @@ def cmd_collect(args):
             )
             prom.set_prometheus_url(svc_url)
             print(f"  Using cluster DNS: {svc_url}")
-            if prom.wait_for_prometheus(prom_result["port"], auth=prom_auth):
+            # No port arg — wait_for_prometheus reads the base set above.
+            if prom.wait_for_prometheus(auth=prom_auth):
                 print("✓ Prometheus reachable via cluster DNS")
                 use_prometheus = True
             else:

@@ -1392,6 +1392,8 @@ def analyze_csv_file(
     callers can still grab paths by key.
     """
 
+    if not formats:
+        raise ValueError(f"At least one output format is required. Supported: {SUPPORTED_FORMATS}")
     unknown = [f for f in formats if f not in SUPPORTED_FORMATS]
     if unknown:
         raise ValueError(f"Unsupported format(s): {unknown}. Supported: {SUPPORTED_FORMATS}")

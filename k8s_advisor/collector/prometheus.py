@@ -13,14 +13,13 @@ Detection Strategy (in priority order):
 6. Manual fallback - prompt user for URL
 """
 
-import base64
 import json
 import random
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from typing import Any
+
+import requests
 
 # Base URL for Prometheus queries. Mutated by ``set_prometheus_url`` once
 # discovery picks an endpoint (in-cluster service DNS, port-forwarded
@@ -537,42 +536,48 @@ def start_port_forward(
 def _http_probe(url: str, timeout: float, auth: tuple[str, str] | str | None) -> bool:
     """Issue a single GET against ``url`` and return True iff it 2xxs.
 
-    Uses urllib so the container doesn't need to ship curl. Auth handling
-    matches the rest of this module (Basic when given a tuple, Bearer when
-    given a str).
+    Uses ``requests`` so we don't ship curl in the container and don't expose
+    the broader scheme set that ``urllib`` accepts (file://, ftp://, ...).
+    Auth handling matches the rest of this module (Basic for a tuple, Bearer
+    for a str).
     """
     if not (url.startswith("http://") or url.startswith("https://")):
-        # Defence-in-depth: never let a non-http(s) URL through to urlopen.
         return False
-    req = urllib.request.Request(url)  # noqa: S310 - http(s) only, validated above
+    headers: dict = {}
+    basic_auth = None
     if isinstance(auth, tuple):
-        creds = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode("ascii")
-        req.add_header("Authorization", f"Basic {creds}")
+        basic_auth = auth
     elif isinstance(auth, str) and auth:
-        req.add_header("Authorization", f"Bearer {auth}")
+        headers["Authorization"] = f"Bearer {auth}"
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - http(s) only, validated above
-            return 200 <= resp.status < 300
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+        resp = requests.get(url, timeout=timeout, headers=headers, auth=basic_auth)
+        return 200 <= resp.status_code < 300
+    except requests.RequestException:
         return False
 
 
-def wait_for_prometheus(port: int = 9091, max_attempts: int = 10, auth: tuple[str, str] | str | None = None) -> bool:
-    """Wait for Prometheus to be available on localhost.
+def wait_for_prometheus(
+    port: int | None = None,
+    max_attempts: int = 10,
+    auth: tuple[str, str] | str | None = None,
+) -> bool:
+    """Wait until Prometheus answers a probe query.
+
+    The probed URL is taken from the module-level base set by
+    ``set_prometheus_url()``. ``port`` is a legacy escape hatch — when given,
+    we override the base with ``http://localhost:<port>``. The probe targets
+    ``/api/v1/query?query=up``.
 
     Args:
-        port: Local port where Prometheus is forwarded
-        max_attempts: Maximum connection attempts (default: 10)
-        auth: Optional authentication credentials.
-              Tuple[str, str] for Basic Auth (username, password)
-              str for Bearer Token
+        port: Optional. When set, probe ``http://localhost:<port>`` instead of
+              the configured base. Used for the laptop port-forward flow.
+        max_attempts: Maximum connection attempts (default: 10).
+        auth: Optional credentials. Tuple = Basic Auth, str = Bearer Token.
 
     Returns:
-        True if Prometheus responds, False otherwise
+        True if Prometheus responds, False after exhausting attempts.
     """
-    # Honour an explicitly-passed port (legacy/laptop port-forward flow);
-    # otherwise read from the module base set by ``set_prometheus_url``.
-    base = f"http://localhost:{port}" if port != 9091 else _PROM_BASE
+    base = f"http://localhost:{port}" if port is not None else _PROM_BASE
     url = f"{base}/api/v1/query?query=up"
     for _ in range(max_attempts):
         if _http_probe(url, timeout=2, auth=auth):
