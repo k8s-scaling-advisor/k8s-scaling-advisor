@@ -16,6 +16,7 @@ import argparse
 import csv
 import fnmatch
 import json
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -331,21 +332,39 @@ def cmd_collect(args):
         print(f"  Namespace: {prom_result['namespace']}")
         print(f"  Port: {prom_result['port']}")
 
-        # Start port-forward
-        print("  Starting port-forward...")
-        pf_process = prom.start_port_forward(
-            prom_result["service_name"], prom_result["namespace"], local_port=9091, remote_port=prom_result["port"]
-        )
-
-        if pf_process:
-            print("  Waiting for Prometheus...")
-            if prom.wait_for_prometheus(9091, auth=prom_auth):
-                print("✓ Prometheus ready on localhost:9091")
+        in_cluster = bool(os.environ.get("KUBERNETES_SERVICE_HOST"))
+        if in_cluster:
+            # Inside a Pod we can hit cluster DNS directly — port-forward
+            # would just be an extra hop.
+            svc_url = (
+                f"http://{prom_result['service_name']}.{prom_result['namespace']}"
+                f".svc.cluster.local:{prom_result['port']}"
+            )
+            prom.set_prometheus_url(svc_url)
+            print(f"  Using cluster DNS: {svc_url}")
+            if prom.wait_for_prometheus(prom_result["port"], auth=prom_auth):
+                print("✓ Prometheus reachable via cluster DNS")
                 use_prometheus = True
             else:
-                print("⚠️  Prometheus port-forward failed or auth failed, continuing without it")
-                prom.cleanup_port_forward(pf_process)
-                pf_process = None
+                print("⚠️  Prometheus unreachable via cluster DNS, continuing without it")
+        else:
+            print("  Starting port-forward...")
+            pf_process = prom.start_port_forward(
+                prom_result["service_name"],
+                prom_result["namespace"],
+                local_port=9091,
+                remote_port=prom_result["port"],
+            )
+
+            if pf_process:
+                print("  Waiting for Prometheus...")
+                if prom.wait_for_prometheus(9091, auth=prom_auth):
+                    print("✓ Prometheus ready on localhost:9091")
+                    use_prometheus = True
+                else:
+                    print("⚠️  Prometheus port-forward failed or auth failed, continuing without it")
+                    prom.cleanup_port_forward(pf_process)
+                    pf_process = None
     else:
         print("⚠️  Prometheus not detected, continuing with metrics-server only")
 

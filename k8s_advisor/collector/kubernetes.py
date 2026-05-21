@@ -4,6 +4,7 @@ This module uses the kubernetes Python library instead of kubectl commands
 for more robust and efficient data collection.
 """
 
+import os
 import sys
 
 from kubernetes import client, config
@@ -13,30 +14,92 @@ from kubernetes.client.rest import ApiException
 def load_kube_config() -> bool:
     """Load Kubernetes configuration.
 
-    Tries local kubeconfig first (developer/laptop flow), then falls back to
-    in-cluster ServiceAccount credentials (Pod/CronJob flow).
+    When running inside a Pod (KUBERNETES_SERVICE_HOST is set by the kubelet),
+    use in-cluster ServiceAccount credentials first — load_kube_config can
+    return success against an empty or stale ~/.kube/config and produce 401s
+    on the next API call.
+
+    On a developer laptop, prefer kubeconfig.
 
     Returns:
         True if successful, False otherwise
     """
-    try:
-        config.load_kube_config()
-        return True
-    except Exception:
+    in_cluster = bool(os.environ.get("KUBERNETES_SERVICE_HOST"))
+    loaders = (
+        (config.load_incluster_config, config.load_kube_config)
+        if in_cluster
+        else (config.load_kube_config, config.load_incluster_config)
+    )
+    last_err: Exception | None = None
+    for loader in loaders:
         try:
-            config.load_incluster_config()
+            loader()
+            _normalize_bearer_prefix()
             return True
         except Exception as e:
-            print(f"Error loading kubeconfig/in-cluster config: {e}", file=sys.stderr)
-            return False
+            last_err = e
+            continue
+    if last_err is not None:
+        print(f"Error loading kubeconfig/in-cluster config: {last_err}", file=sys.stderr)
+    return False
+
+
+def _normalize_bearer_prefix() -> None:
+    """Make in-cluster auth work across kubernetes-client versions.
+
+    v36.0.0 broke in-cluster auth in two ways relative to earlier releases:
+
+    1. ``load_incluster_config()`` stores the token at ``api_key['authorization']``
+       prefixed with the lowercase string ``'bearer '`` baked into the value.
+    2. ``Configuration.auth_settings()`` only emits a Bearer header when
+       ``api_key`` contains the exact key ``'BearerToken'`` — so the token
+       loaded by (1) is silently dropped and every API call returns 401.
+
+    This function rewrites the configuration so:
+
+    - ``api_key['BearerToken']`` holds the bare token (no prefix)
+    - ``api_key_prefix['BearerToken']`` is the canonical ``'Bearer'``
+
+    Result: ``auth_settings()`` produces ``Authorization: Bearer <token>``
+    and the API server accepts it. Working configurations from older lib
+    versions and from kubeconfig flows are left untouched.
+    """
+    try:
+        cfg = client.Configuration._default
+    except AttributeError:
+        return
+    if cfg is None:
+        return
+    api_key = getattr(cfg, "api_key", None) or {}
+    if not isinstance(api_key, dict):
+        return
+
+    raw = api_key.get("authorization") or api_key.get("BearerToken")
+    if not raw:
+        return
+
+    # Strip an embedded prefix if present (handles both the v36 lowercase
+    # ``bearer `` and any future variant).
+    head, _, rest = raw.partition(" ")
+    token = rest if head.lower() == "bearer" and rest else raw
+
+    cfg.api_key = {"BearerToken": token}
+    cfg.api_key_prefix = {"BearerToken": "Bearer"}
 
 
 def get_cluster_name() -> str:
-    """Get current cluster name from kubeconfig context.
+    """Get current cluster name.
 
-    Returns:
-        Cluster name or 'unknown'
+    Resolution order:
+      1. K8S_ADVISOR_CLUSTER env var (allows operators to label runs from
+         the chart without modifying code).
+      2. Active kubeconfig context name (developer flow).
+      3. The fallback "unknown" — used when neither is available, e.g. an
+         in-cluster Pod with no env var set.
     """
+    explicit = os.environ.get("K8S_ADVISOR_CLUSTER")
+    if explicit:
+        return explicit
     try:
         _contexts, active_context = config.list_kube_config_contexts()
         if active_context:

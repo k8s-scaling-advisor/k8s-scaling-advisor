@@ -58,6 +58,11 @@ args:
   - --format
   - md,json
 
+# Set the cluster label that appears in report filenames and JSON output.
+# Inside a Pod there's no kubeconfig context to derive this from, so set it
+# here per-environment (e.g. "prod-us-east-1", "staging").
+clusterName: ""
+
 extraEnv: []
 
 podAnnotations: {}

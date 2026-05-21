@@ -60,6 +60,10 @@ spec:
                 - {{ tpl . $ | quote }}
                 {{- end }}
               env:
+                {{- if .Values.clusterName }}
+                - name: K8S_ADVISOR_CLUSTER
+                  value: {{ .Values.clusterName | quote }}
+                {{- end }}
                 {{- with .Values.extraEnv }}
                 {{- toYaml . | nindent 16 }}
                 {{- end }}

@@ -13,11 +13,37 @@ Detection Strategy (in priority order):
 6. Manual fallback - prompt user for URL
 """
 
+import base64
 import json
 import random
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from typing import Any
+
+# Base URL for Prometheus queries. Mutated by ``set_prometheus_url`` once
+# discovery picks an endpoint (in-cluster service DNS, port-forwarded
+# localhost, or operator-supplied URL).
+_PROM_BASE = "http://localhost:9091"
+
+
+def set_prometheus_url(base: str) -> None:
+    """Override the Prometheus base URL used by all query functions.
+
+    ``base`` should NOT have a trailing slash and should NOT include
+    ``/api/v1/query``. Examples:
+        http://localhost:9091
+        http://prometheus-server.monitoring.svc.cluster.local:9090
+        https://prom.example.com
+    """
+    global _PROM_BASE
+    _PROM_BASE = base.rstrip("/")
+
+
+def get_prometheus_url() -> str:
+    """Read the current Prometheus base URL (test/diagnostic helper)."""
+    return _PROM_BASE
 
 
 def _request_with_retry(
@@ -508,6 +534,29 @@ def start_port_forward(
         return None
 
 
+def _http_probe(url: str, timeout: float, auth: tuple[str, str] | str | None) -> bool:
+    """Issue a single GET against ``url`` and return True iff it 2xxs.
+
+    Uses urllib so the container doesn't need to ship curl. Auth handling
+    matches the rest of this module (Basic when given a tuple, Bearer when
+    given a str).
+    """
+    if not (url.startswith("http://") or url.startswith("https://")):
+        # Defence-in-depth: never let a non-http(s) URL through to urlopen.
+        return False
+    req = urllib.request.Request(url)  # noqa: S310 - http(s) only, validated above
+    if isinstance(auth, tuple):
+        creds = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode("ascii")
+        req.add_header("Authorization", f"Basic {creds}")
+    elif isinstance(auth, str) and auth:
+        req.add_header("Authorization", f"Bearer {auth}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - http(s) only, validated above
+            return 200 <= resp.status < 300
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+        return False
+
+
 def wait_for_prometheus(port: int = 9091, max_attempts: int = 10, auth: tuple[str, str] | str | None = None) -> bool:
     """Wait for Prometheus to be available on localhost.
 
@@ -521,34 +570,14 @@ def wait_for_prometheus(port: int = 9091, max_attempts: int = 10, auth: tuple[st
     Returns:
         True if Prometheus responds, False otherwise
     """
-    url = f"http://localhost:{port}/api/v1/query?query=up"
-
-    def build_curl_cmd(url: str, auth: tuple[str, str] | str | None) -> list[str]:
-        """Build a curl argv list, optionally adding Basic-Auth or Bearer-Token flags."""
-        cmd = ["curl", "-s", "-f", url]
-        if auth:
-            if isinstance(auth, tuple):  # Basic Auth
-                cmd.extend(["-u", f"{auth[0]}:{auth[1]}"])
-            elif isinstance(auth, str):  # Bearer Token
-                cmd.extend(["-H", f"Authorization: Bearer {auth}"])
-        return cmd
-
+    # Honour an explicitly-passed port (legacy/laptop port-forward flow);
+    # otherwise read from the module base set by ``set_prometheus_url``.
+    base = f"http://localhost:{port}" if port != 9091 else _PROM_BASE
+    url = f"{base}/api/v1/query?query=up"
     for _ in range(max_attempts):
-        try:
-            result = subprocess.run(
-                build_curl_cmd(url, auth),
-                capture_output=True,
-                timeout=2,
-            )
-
-            if result.returncode == 0:
-                return True
-
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            pass
-
+        if _http_probe(url, timeout=2, auth=auth):
+            return True
         time.sleep(1)
-
     return False
 
 
@@ -562,18 +591,7 @@ def test_connection(url: str) -> bool:
         True if connection successful, False otherwise
     """
     test_url = f"{url.rstrip('/')}/api/v1/query?query=up"
-
-    try:
-        result = subprocess.run(
-            ["curl", "-s", "-f", test_url],
-            capture_output=True,
-            timeout=5,
-        )
-
-        return result.returncode == 0
-
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-        return False
+    return _http_probe(test_url, timeout=5, auth=None)
 
 
 def cleanup_port_forward(process: subprocess.Popen) -> None:
@@ -613,7 +631,7 @@ def query_cpu_percentiles(
         Returns empty dict on failure
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
@@ -739,7 +757,7 @@ def query_memory_volatility(
         Returns empty dict on failure
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
@@ -909,7 +927,7 @@ def query_cpu_throttle_pct(
         Throttle percentage (0-100), or 0.0 on failure / no data
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
@@ -995,7 +1013,7 @@ def query_days_since_last_restart(
         Days since last restart, or -1.0 if unavailable
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
@@ -1059,7 +1077,7 @@ def query_restart_rate(
         Restart rate per day (float), or 0.0 on failure
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
