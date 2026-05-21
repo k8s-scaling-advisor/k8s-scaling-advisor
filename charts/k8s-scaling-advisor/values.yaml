@@ -46,7 +46,8 @@ command:
   - k8s-advisor
 
 # Default: scan only the release namespace, matching the namespace-scoped
-# RBAC default above. To go cluster-wide, set `rbac.clusterWide=true` AND
+# RBAC default above. `--graphs` enables the 6 PNG charts the markdown
+# report links to. To go cluster-wide, set `rbac.clusterWide=true` AND
 # override these args with `--all-namespaces` (or list namespaces with -n).
 #
 # Strings are passed through `tpl` so values like "{{ .Release.Namespace }}"
@@ -57,6 +58,7 @@ args:
   - "{{ .Release.Namespace }}"
   - --format
   - md,json
+  - --graphs
 
 # Set the cluster label that appears in report filenames and JSON output.
 # Inside a Pod there's no kubeconfig context to derive this from, so set it
@@ -78,9 +80,10 @@ resources:
 
 securityContext:
   runAsNonRoot: true
-  runAsUser: 1000
-  runAsGroup: 1000
-  fsGroup: 1000
+  # 65532 = `nonroot` user in the distroless base image.
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
 
 containerSecurityContext:
   allowPrivilegeEscalation: false
