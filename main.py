@@ -586,6 +586,10 @@ def cmd_analyze(args):
             print(f"📄 {fmt.upper()}: {path}")
         if args.graphs:
             print(f"📊 Graphs: {reports_dir}/graphs/")
+        # Sentinel for the optional sidecar uploader: signals "all writes
+        # are flushed, safe to upload". The chart's uploader watches for
+        # this file and exits once it's seen and the upload is done.
+        (reports_dir / ".done").write_text("ok\n", encoding="utf-8")
     except Exception as e:
         print(f"\n✗ Analysis failed: {e}", file=sys.stderr)
         import traceback

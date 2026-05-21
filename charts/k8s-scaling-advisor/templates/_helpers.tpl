@@ -35,3 +35,26 @@
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+Uploader sidecar image. Default depends on kind:
+  s3    -> amazon/aws-cli:2.17.0
+  http  -> curlimages/curl:8.10.1
+  slack -> curlimages/curl:8.10.1
+Operator can override via .Values.uploader.image.repository / .tag.
+*/ -}}
+{{- define "k8s-scaling-advisor.uploaderImage" -}}
+{{- $repo := .Values.uploader.image.repository -}}
+{{- $tag := .Values.uploader.image.tag -}}
+{{- if not $repo -}}
+  {{- if eq .Values.uploader.kind "s3" -}}
+    {{- $repo = "amazon/aws-cli" -}}
+    {{- if not $tag }}{{- $tag = "2.17.0" -}}{{- end -}}
+  {{- else -}}
+    {{- $repo = "curlimages/curl" -}}
+    {{- if not $tag }}{{- $tag = "8.10.1" -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if not $tag }}{{- $tag = "latest" -}}{{- end -}}
+{{- printf "%s:%s" $repo $tag -}}
+{{- end -}}

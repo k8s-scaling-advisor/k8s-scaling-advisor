@@ -4,7 +4,7 @@ description: Run K8s Scaling Advisor as a Kubernetes CronJob.
 type: application
 version: 0.1.0
 appVersion: "3.0.0"
-kubeVersion: ">=1.25.0-0"
+kubeVersion: ">=1.29.0-0"
 home: https://github.com/k8s-scaling-advisor/k8s-scaling-advisor
 sources:
   - https://github.com/k8s-scaling-advisor/k8s-scaling-advisor

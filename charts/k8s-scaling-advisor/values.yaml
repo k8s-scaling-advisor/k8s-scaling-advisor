@@ -93,7 +93,78 @@ tolerations: []
 affinity: {}
 
 # Reports are written to an ephemeral emptyDir inside each Job pod.
-# Capture them via `kubectl logs` or by sidecar-shipping to your destination
-# of choice (S3, Slack, ticketing system, etc.) before the pod terminates.
+# Capture them via the optional sidecar uploader below, or by adding your
+# own sidecar that watches `/app/reports/.done` and ships files to your
+# destination of choice (Slack, ticketing system, etc.).
 reports:
   path: /app/reports
+
+# Optional: ship reports to S3, Slack, or an HTTP endpoint after each run.
+# Implemented as a native Kubernetes sidecar (initContainer with
+# restartPolicy: Always) so the pod terminates cleanly when the main
+# container exits. Requires Kubernetes >= 1.29.
+#
+# Coordination: the main `advisor` container writes `.done` into the
+# reports volume when its analysis is finished. The sidecar polls for
+# that sentinel, ships the files, and exits.
+uploader:
+  enabled: false
+  # One of: "s3", "slack", "http".
+  # The chart picks a sensible default image per kind; override below.
+  kind: s3
+  image:
+    # Leave repository empty to use the per-kind default
+    # (s3: amazon/aws-cli, slack/http: curlimages/curl).
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  # Polling interval (seconds) while waiting for the main container to
+  # write the `.done` sentinel.
+  pollIntervalSeconds: 5
+  # Maximum time to wait for the sentinel before giving up.
+  maxWaitSeconds: 600
+
+  # ─── kind: s3 ─────────────────────────────────────────────────────
+  # Credentials come from the pod's ServiceAccount via IRSA / Workload
+  # Identity / Pod Identity. For static credentials, mount a Secret via
+  # `extraEnv` (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY).
+  s3:
+    bucket: ""
+    prefix: "k8s-advisor"
+    region: ""
+    endpointUrl: ""  # Set for S3-compatible (MinIO, GCS via HMAC, R2)
+
+  # ─── kind: slack ──────────────────────────────────────────────────
+  # The sidecar uploads each report file to a Slack channel using
+  # `files.upload` (legacy) or `files.upload_v2` if your token supports
+  # it. Provide a Bot/User token via Secret reference.
+  slack:
+    # Channel ID (preferred — survives renames). e.g. "C0123456789"
+    channel: ""
+    # Existing Secret containing the token. Key defaults to "token".
+    tokenSecret:
+      name: ""
+      key: token
+    # Optional message prefix posted with the upload.
+    messagePrefix: "K8s Scaling Advisor report"
+    # If true, only ship the markdown summary (skip JSON / raw CSV).
+    markdownOnly: true
+
+  # ─── kind: http ───────────────────────────────────────────────────
+  # POSTs each file as multipart/form-data (field name "file"). Use this
+  # for ticketing systems, custom collectors, generic webhooks.
+  http:
+    url: ""
+    headers: {}  # e.g., { Authorization: "Bearer ..." }
+
+  extraEnv: []
+  # Mount additional secrets (e.g., for static AWS creds, custom CAs).
+  extraVolumeMounts: []
+  extraVolumes: []

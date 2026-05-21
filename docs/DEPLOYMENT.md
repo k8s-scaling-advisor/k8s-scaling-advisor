@@ -91,10 +91,106 @@ Example:
 --set cronjob.schedule="0 */6 * * *"
 ```
 
-Reports are written inside the pod to `/app/reports` (`emptyDir`, ephemeral).
-Capture them via `kubectl logs` or by adding a sidecar that ships
-markdown/JSON to your destination of choice (S3, Slack, ticketing system, etc.)
-before the Job pod terminates.
+## 5) Where the reports live
+
+Each Job pod writes reports to **`/app/reports`** inside its `emptyDir`
+volume. The advisor produces:
+
+- `k8s-advisor_<cluster>_<timestamp>.csv` — raw 40-column collection
+- `k8s-advisor_<cluster>_<timestamp>.md` — markdown summary
+- `k8s-advisor_<cluster>_<timestamp>.json` — same data, machine-readable
+
+Once the Job pod terminates, the `emptyDir` is gone. To retain the
+reports, enable the **uploader sidecar** (next section) — or copy them
+out manually before `ttlSecondsAfterFinished` expires (default 24h):
+
+```bash
+kubectl cp -n platform-observability \
+  <job-pod>:/app/reports/. ./local-reports/
+```
+
+## 6) Uploader sidecar (S3, Slack, HTTP)
+
+Opt-in via `uploader.enabled=true`. Uses a Kubernetes 1.29+ native
+sidecar (initContainer with `restartPolicy: Always`) so the pod
+terminates cleanly when the main container finishes.
+
+The advisor writes a `.done` sentinel file when its analysis is
+complete. The sidecar polls for that sentinel, ships the reports, and
+exits.
+
+### S3
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set uploader.enabled=true \
+  --set uploader.kind=s3 \
+  --set uploader.s3.bucket=my-reports-bucket \
+  --set uploader.s3.prefix=k8s-advisor \
+  --set uploader.s3.region=us-east-1
+```
+
+Credentials come from the pod's ServiceAccount via IRSA / Workload
+Identity / Pod Identity. For static credentials, mount a Secret via
+`uploader.extraEnv`:
+
+```yaml
+uploader:
+  extraEnv:
+    - name: AWS_ACCESS_KEY_ID
+      valueFrom: { secretKeyRef: { name: aws-creds, key: access_key } }
+    - name: AWS_SECRET_ACCESS_KEY
+      valueFrom: { secretKeyRef: { name: aws-creds, key: secret_key } }
+```
+
+S3-compatible (MinIO, R2, GCS via HMAC):
+
+```bash
+--set uploader.s3.endpointUrl=https://s3.example.com
+```
+
+### Slack
+
+Create a Slack Bot/User token with `files:write`. Store it in a Secret:
+
+```bash
+kubectl create secret generic slack-token \
+  -n platform-observability \
+  --from-literal=token=xoxb-...
+```
+
+Install:
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set uploader.enabled=true \
+  --set uploader.kind=slack \
+  --set uploader.slack.channel=C0123456789 \
+  --set uploader.slack.tokenSecret.name=slack-token \
+  --set uploader.slack.markdownOnly=true
+```
+
+`channel` must be a Channel ID (starts with `C`), not a name. The bot
+must be a member of the channel.
+
+### Generic HTTP (webhooks, ticketing, custom collectors)
+
+The sidecar POSTs each report file as `multipart/form-data` with the
+field name `file`:
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set uploader.enabled=true \
+  --set uploader.kind=http \
+  --set uploader.http.url=https://collector.example.com/upload \
+  --set 'uploader.http.headers.Authorization=Bearer <token>'
+```
 
 ## 5) Verify published image signature (optional, recommended)
 
