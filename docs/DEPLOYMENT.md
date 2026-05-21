@@ -36,16 +36,25 @@ talks directly to the API server.
 
 ## 2) Deploy with Helm
 
-Chart path:
+Each release publishes the chart as an OCI artifact alongside the image:
 
 ```text
-charts/k8s-scaling-advisor
+oci://ghcr.io/<owner>/charts/k8s-scaling-advisor
 ```
+
+The exact `--version` and the digest-pinned `--set image.digest` for any
+release are printed on its GitHub Release page. No `git clone` required.
+
+For local-development installs, the chart source still lives at
+`charts/k8s-scaling-advisor/` in this repo and you can `helm install` from
+that path directly.
 
 ### Namespace-scoped deployment (default)
 
 ```bash
-helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+helm upgrade --install k8s-scaling-advisor \
+  oci://ghcr.io/<owner>/charts/k8s-scaling-advisor \
+  --version <chart-version> \
   --namespace platform-observability \
   --create-namespace \
   --set image.digest=sha256:<published-digest>
@@ -66,7 +75,9 @@ When you want fleet visibility, flip both `rbac.clusterWide=true` AND
 the args to `--all-namespaces`:
 
 ```bash
-helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+helm upgrade --install k8s-scaling-advisor \
+  oci://ghcr.io/<owner>/charts/k8s-scaling-advisor \
+  --version <chart-version> \
   --namespace platform-observability \
   --create-namespace \
   --set image.digest=sha256:<published-digest> \
