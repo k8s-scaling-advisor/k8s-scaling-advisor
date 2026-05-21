@@ -20,8 +20,8 @@ setup(
     py_modules=["main"],
     # Core dependencies
     install_requires=[
-        "kubernetes>=12.0.0",  # For K8s API access
-        "jinja2>=3.0.0",  # For markdown report templating
+        "kubernetes>=12.0.1",  # For K8s API access
+        "jinja2>=3.1.6",  # For markdown report templating
     ],
     # Ship the Jinja templates with the package.
     include_package_data=True,
@@ -31,25 +31,25 @@ setup(
     # Optional dependencies for visualization and development
     extras_require={
         "viz": [
-            "pandas>=1.5.0",
-            "matplotlib>=3.5.0",
+            "pandas>=1.5.3",
+            "matplotlib>=3.9.4",
             "numpy>=1.20.0",
         ],
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=3.0.0",
             "black>=22.0.0",
-            "ruff>=0.0.250",
+            "ruff>=0.15.13",
             "mypy>=0.990",
         ],
         "all": [
-            "pandas>=1.5.0",
-            "matplotlib>=3.5.0",
+            "pandas>=1.5.3",
+            "matplotlib>=3.9.4",
             "numpy>=1.20.0",
             "pytest>=7.0.0",
             "pytest-cov>=3.0.0",
             "black>=22.0.0",
-            "ruff>=0.0.250",
+            "ruff>=0.15.13",
             "mypy>=0.990",
         ],
     },
