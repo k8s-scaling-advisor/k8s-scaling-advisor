@@ -132,14 +132,15 @@ volume. The advisor produces:
 - `k8s-advisor_<cluster>_<timestamp>.md` — markdown summary
 - `k8s-advisor_<cluster>_<timestamp>.json` — same data, machine-readable
 
-Once the Job pod terminates, the `emptyDir` is gone. To retain the
-reports, enable the **uploader sidecar** (next section) — or copy them
-out manually before `ttlSecondsAfterFinished` expires (default 24h):
+Once the Job pod terminates, the `emptyDir` is gone. Three ways to
+keep the reports:
 
-```bash
-kubectl cp -n platform-observability \
-  <job-pod>:/app/reports/. ./local-reports/
-```
+- **Production:** enable the [uploader sidecar](#6-uploader-sidecar-s3-slack-http)
+  (next section) — ships files to S3 / Slack / HTTP before the pod exits.
+- **Ad-hoc:** [debug mode](#7-debug-mode-fetch-reports-from-a-finished-pod)
+  keeps the pod alive for 30 min so you can `kubectl debug` + `kubectl cp`.
+- **Quick check:** `kubectl logs <job-pod>` shows summary stats and report
+  paths but not the full markdown content.
 
 ## 6) Uploader sidecar (S3, Slack, HTTP)
 
@@ -224,7 +225,47 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   --set 'uploader.http.headers.Authorization=Bearer <token>'
 ```
 
-## 5) Verify published image signature (optional, recommended)
+## 7) Debug mode: fetch reports from a finished pod
+
+The runtime image is distroless (no shell), so a `Completed` pod can't
+be `kubectl exec`'d into. For ad-hoc inspection, set
+`debug.keepAlive=true` and the main container will sleep for 30 minutes
+(configurable via `debug.keepAliveSeconds`) after writing the reports.
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set debug.keepAlive=true
+```
+
+While the pod is in the sleep phase, attach a busybox debug container
+and copy the reports out via the shared process namespace:
+
+```bash
+# 1. Find the job's pod
+POD=$(kubectl get pods -n platform-observability \
+  -l batch.kubernetes.io/job-name=<your-job> \
+  -o jsonpath='{.items[0].metadata.name}')
+
+# 2. Inject a debugger that copies reports to its own /tmp/out
+kubectl debug -n platform-observability "$POD" \
+  --image=busybox --share-processes --target=advisor \
+  --container=debugger --quiet \
+  -- sh -c 'cp -r /proc/$(pidof python3)/root/app/reports /tmp/out && \
+            ls /tmp/out && sleep 600' &
+
+# 3. Pull the files out
+kubectl cp -n platform-observability \
+  "$POD":/tmp/out ./local-reports -c debugger
+```
+
+This is intentionally manual — production should use the
+[uploader sidecar](#6-uploader-sidecar-s3-slack-http), which never
+needs human intervention. Debug mode is for "I want to look at one
+specific run on this cluster, right now."
+
+## 8) Verify published image signature (optional, recommended)
 
 ```bash
 cosign verify \

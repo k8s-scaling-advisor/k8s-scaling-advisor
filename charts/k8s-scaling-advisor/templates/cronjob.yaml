@@ -166,6 +166,29 @@ spec:
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               securityContext:
                 {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              {{- if .Values.debug.keepAlive }}
+              # Debug mode: run the advisor, then sleep so an ephemeral
+              # debug container can be attached and report files copied
+              # out. Distroless has Python but no shell, so we drive the
+              # whole thing from python -c. Production should leave
+              # debug.keepAlive=false and use the uploader sidecar.
+              command:
+                - python3
+              args:
+                - "-c"
+                - |
+                  import os, runpy, sys, time
+                  sys.argv = ["k8s-advisor"] + {{ .Values.args | toJson }}
+                  rc = 0
+                  try:
+                      runpy.run_module("k8s_advisor.cli", run_name="__main__")
+                  except SystemExit as e:
+                      rc = int(getattr(e, "code", 0) or 0)
+                  print(f"[debug] advisor exited rc={rc}; sleeping {{ .Values.debug.keepAliveSeconds }}s for debug attach")
+                  print("[debug] kubectl debug <pod> --image=busybox --share-processes --target=advisor -- /bin/sh")
+                  time.sleep({{ .Values.debug.keepAliveSeconds }})
+                  sys.exit(rc)
+              {{- else }}
               command:
                 {{- range .Values.command }}
                 - {{ tpl . $ | quote }}
@@ -174,6 +197,7 @@ spec:
                 {{- range .Values.args }}
                 - {{ tpl . $ | quote }}
                 {{- end }}
+              {{- end }}
               env:
                 # Keep app output path aligned with reports.path so the
                 # uploader sidecar finds the files.

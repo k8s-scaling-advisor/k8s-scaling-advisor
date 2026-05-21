@@ -45,6 +45,25 @@ cronjob:
   backoffLimit: 1
   restartPolicy: Never
 
+# Ad-hoc debug mode for fetching reports out of a finished pod.
+# The runtime image is distroless (no shell), so a Completed pod can't
+# be exec'd into. Setting this `true` makes the main container sleep
+# after the run finishes so you have time to attach an ephemeral debug
+# container and `cp` files out:
+#
+#   kubectl debug -n <ns> <pod> --image=busybox \
+#     --share-processes --target=advisor -- /bin/sh
+#   # in the debug container:
+#   cp /proc/$(pgrep python)/root/app/reports/* /tmp/out/
+#   exit
+#   kubectl cp <ns>/<pod>:/tmp/out ./reports -c debugger
+#
+# Production should leave this off and use the uploader sidecar instead.
+debug:
+  keepAlive: false
+  # How long to keep the pod alive after the run, in seconds.
+  keepAliveSeconds: 1800  # 30 min
+
 command:
   - k8s-advisor
 
