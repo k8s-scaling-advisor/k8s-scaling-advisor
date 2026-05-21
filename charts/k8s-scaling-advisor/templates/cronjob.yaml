@@ -90,11 +90,18 @@ spec:
                   if [ "${SLACK_MARKDOWN_ONLY:-true}" != "true" ]; then PATTERN='*'; fi
                   for f in $(find . -type f -name "$PATTERN" ! -name '.done' | sed 's|^\./||'); do
                     echo "[uploader] uploading $f to Slack channel $SLACK_CHANNEL"
-                    curl -fsS -F file=@"$f" \
+                    # Slack returns HTTP 200 for many application-level errors
+                    # (invalid_auth, no_file_data, channel_not_found, ...).
+                    # We must parse the JSON body and check `"ok":true`.
+                    resp="$(curl -fsS -F file=@"$f" \
                       -F "channels=$SLACK_CHANNEL" \
                       -F "initial_comment=${SLACK_MESSAGE_PREFIX:-K8s Scaling Advisor report}: $f" \
                       -H "Authorization: Bearer $SLACK_TOKEN" \
-                      https://slack.com/api/files.upload
+                      https://slack.com/api/files.upload)"
+                    if ! printf '%s' "$resp" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+                      echo "[uploader] Slack upload failed for $f: $resp" >&2
+                      exit 1
+                    fi
                     echo
                   done
                   {{- else if eq .Values.uploader.kind "http" }}
