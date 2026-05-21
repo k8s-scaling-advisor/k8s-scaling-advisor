@@ -22,13 +22,16 @@ serviceAccount:
 
 rbac:
   create: true
+  # The advisor is a cluster-admin tool: it looks at *other* workloads
+  # to recommend resource changes. Scanning only its own namespace is
+  # rarely useful, so the chart defaults to cluster-wide RBAC paired
+  # with `--all-namespaces` args. Flip both knobs (clusterWide=false +
+  # explicit `-n <ns>` args) for paranoid / single-tenant environments.
+  #
+  # true  = cluster-wide ClusterRole/ClusterRoleBinding (all namespaces) [default]
   # false = namespace-scoped Role/RoleBinding (only the release namespace).
-  #         This is the default and matches the project guideline that the
-  #         advisor must run with namespace-scoped permissions.
-  # true  = cluster-wide ClusterRole/ClusterRoleBinding (all namespaces).
-  #         If you flip this on, also flip `args` to `--all-namespaces` (or
-  #         pass an explicit list of namespaces with -n).
-  clusterWide: false
+  #         If you flip this off, also change `args` to `-n <namespace>`.
+  clusterWide: true
 
 cronjob:
   enabled: true
@@ -45,17 +48,26 @@ cronjob:
 command:
   - k8s-advisor
 
-# Default: scan only the release namespace, matching the namespace-scoped
-# RBAC default above. `--graphs` enables the 6 PNG charts the markdown
-# report links to. To go cluster-wide, set `rbac.clusterWide=true` AND
-# override these args with `--all-namespaces` (or list namespaces with -n).
+# Default: scan all namespaces (--all-namespaces) since this is a
+# cluster-admin advisory tool. `--graphs` enables the PNG charts the
+# markdown report links to. Override with explicit namespaces if you
+# need a narrower scope:
+#
+#   args:
+#     - report
+#     - -n
+#     - team-a
+#     - -n
+#     - team-b
+#     - --format
+#     - md,json
+#     - --graphs
 #
 # Strings are passed through `tpl` so values like "{{ .Release.Namespace }}"
 # render at install time.
 args:
   - report
-  - -n
-  - "{{ .Release.Namespace }}"
+  - --all-namespaces
   - --format
   - md,json
   - --graphs

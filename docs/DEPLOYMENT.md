@@ -50,7 +50,11 @@ always reflects the current branch.
 The examples below show both invocations. Anywhere you see `./charts/...`
 works, the equivalent `oci://...` works too, and vice versa.
 
-### Namespace-scoped deployment (default)
+### Cluster-wide deployment (default)
+
+The advisor is a cluster-admin tool — its job is to look at *other* workloads
+to recommend resource changes. Scanning only its own namespace is rarely
+useful, so the chart defaults to cluster-wide RBAC + `--all-namespaces`.
 
 From the OCI artifact (pinned release):
 
@@ -74,17 +78,13 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
 
 This creates:
 - `ServiceAccount`
-- namespace-scoped `Role` + `RoleBinding`
-- `CronJob` running `report -n <release-namespace> --format md,json` daily
+- `ClusterRole` + `ClusterRoleBinding` (read-only across the cluster)
+- `CronJob` running `report --all-namespaces --format md,json --graphs` daily
 
-The release namespace is the only namespace the advisor can read. This
-matches the project guideline that the advisor must work with
-namespace-scoped permissions (no cluster-admin required).
+### Namespace-scoped deployment
 
-### Cluster-wide deployment
-
-When you want fleet visibility, flip both `rbac.clusterWide=true` AND
-the args to `--all-namespaces`. Either chart source works — pick one:
+For paranoid / single-tenant environments, flip BOTH `rbac.clusterWide=false`
+AND the args to a specific namespace:
 
 ```bash
 # OCI (pinned release)
@@ -94,27 +94,16 @@ helm upgrade --install k8s-scaling-advisor \
   --namespace platform-observability \
   --create-namespace \
   --set image.digest=sha256:<published-digest> \
-  --set rbac.clusterWide=true \
+  --set rbac.clusterWide=false \
   --set-string 'args[0]=report' \
-  --set-string 'args[1]=--all-namespaces' \
-  --set-string 'args[2]=--format' \
-  --set-string 'args[3]=md,json'
+  --set-string 'args[1]=-n' \
+  --set-string 'args[2]={{ .Release.Namespace }}' \
+  --set-string 'args[3]=--format' \
+  --set-string 'args[4]=md,json' \
+  --set-string 'args[5]=--graphs'
 ```
 
-```bash
-# Local checkout
-helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
-  --namespace platform-observability \
-  --create-namespace \
-  --set image.digest=sha256:<published-digest> \
-  --set rbac.clusterWide=true \
-  --set-string 'args[0]=report' \
-  --set-string 'args[1]=--all-namespaces' \
-  --set-string 'args[2]=--format' \
-  --set-string 'args[3]=md,json'
-```
-
-This swaps the namespace-scoped `Role` for a `ClusterRole`/`ClusterRoleBinding`.
+This swaps the `ClusterRole` for a namespace-scoped `Role`/`RoleBinding`.
 
 ## 3) Prefer immutable digests over tags
 
