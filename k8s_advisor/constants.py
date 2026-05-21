@@ -362,9 +362,11 @@ RESTART_PENALTY = 0.15  # crash-loop noise contaminates metrics
 SINGLE_REPLICA_PENALTY = 0.05  # no peer averaging
 
 # Threshold above which restart_rate is treated as crash-loop noise
-# (per day). Mirrors UNSTABLE_RESTART_RATE_THRESHOLD intentionally — same
-# "this is too unstable to trust the metrics" line in the sand.
-RESTART_RATE_THRESHOLD = 2.0
+# (per day). Bound to UNSTABLE_RESTART_RATE_THRESHOLD so the two stay
+# in sync — they encode the same "this is too unstable to trust the
+# metrics" judgment and would silently disagree if someone bumped one
+# without the other.
+RESTART_RATE_THRESHOLD = UNSTABLE_RESTART_RATE_THRESHOLD
 
 # Bonus when both CPU and memory limits are set — saturation is then
 # observable through metrics-server, so the data we have is more
