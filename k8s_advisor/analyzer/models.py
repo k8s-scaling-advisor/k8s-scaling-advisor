@@ -2,7 +2,6 @@
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Optional
 
 
 class Priority(Enum):
@@ -72,10 +71,10 @@ class ResourceRecommendation:
         requires_manual_action: Flag for immediate manual resource updates
     """
 
-    cpu_request: Optional[str] = None
-    cpu_limit: Optional[str] = None
-    memory_request: Optional[str] = None
-    memory_limit: Optional[str] = None
+    cpu_request: str | None = None
+    cpu_limit: str | None = None
+    memory_request: str | None = None
+    memory_limit: str | None = None
     rationale: str = ""
     requires_manual_action: bool = False
 
@@ -159,7 +158,7 @@ class DeploymentAnalysis:
     # ─────────────────────────────────────────────────────────────────────────
     issues: list[IssueType] = field(default_factory=list)
     scaling_approach: ScalingApproach = ScalingApproach.MANUAL
-    recommended_resources: Optional[ResourceRecommendation] = None
+    recommended_resources: ResourceRecommendation | None = None
     action_required: str = ""
     rationale: str = ""
     owner_team: str = "Unknown"  # Populated from namespace ownership data
