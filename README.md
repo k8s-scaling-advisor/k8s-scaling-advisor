@@ -122,8 +122,13 @@ k8s-advisor report --namespace-pattern 'app-*' --graphs
 ## Output Files
 
 - CSV: `reports/k8s-advisor_<cluster>_<timestamp>.csv`
-- Markdown: `reports/k8s-advisor_<cluster>_<timestamp>.md`
-- Graphs (optional): `reports/graphs/*.png`
+- Markdown (default): `reports/k8s-advisor_<cluster>_<timestamp>.md`
+- JSON (machine-readable, opt-in via `--format json` or `--format md,json`):
+  `reports/k8s-advisor_<cluster>_<timestamp>.json`
+- Graphs (optional, with `--graphs`): `reports/graphs/*.png`
+
+For in-cluster runs, see `docs/DEPLOYMENT.md` § 5 (where reports live)
+and § 6 (uploader sidecar — S3 / Slack / HTTP / Teams).
 
 ## Report Priorities
 

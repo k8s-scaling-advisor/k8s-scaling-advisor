@@ -135,8 +135,8 @@ volume. The advisor produces:
 Once the Job pod terminates, the `emptyDir` is gone. Three ways to
 keep the reports:
 
-- **Production:** enable the [uploader sidecar](#6-uploader-sidecar-s3-slack-http)
-  (next section) — ships files to S3 / Slack / HTTP before the pod exits.
+- **Production:** enable the [uploader sidecar](#6-uploader-sidecar-s3-slack-http-teams)
+  (next section) — ships files to S3 / Slack / HTTP / Teams before the pod exits.
 - **Ad-hoc:** [debug mode](#7-debug-mode-fetch-reports-from-a-finished-pod)
   keeps the pod alive for 30 min so you can `kubectl debug` + `kubectl cp`.
 - **Quick check:** `kubectl logs <job-pod>` shows summary stats and report
