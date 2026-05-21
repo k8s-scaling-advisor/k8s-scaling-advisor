@@ -51,6 +51,10 @@
 **Confidence:** {{ _band_emoji }} {{ analysis.confidence_band }} ({{ "%.2f" | format(analysis.confidence) }}) — {{ analysis.confidence_reasons | join("; ") }}
 
 {% endif -%}
+{% if analysis.previously_seen -%}
+**Repeat advice:** seen {{ analysis.times_seen }}× since {{ analysis.first_seen or "earlier run" }} — recommendation unchanged.
+
+{% endif -%}
 {% if collapse_note -%}
 > _{{ collapse_note }}_
 
