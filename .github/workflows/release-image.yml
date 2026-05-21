@@ -94,23 +94,22 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      - name: Run Grype vulnerability scan
+        id: scan
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
         with:
-          image-ref: ${{ steps.vars.outputs.image_repo }}@${{ steps.build.outputs.digest }}
-          format: sarif
-          output: trivy-results.sarif
-          vuln-type: "os,library"
-          severity: "CRITICAL,HIGH"
-          ignore-unfixed: true
-          exit-code: "1"
+          image: ${{ steps.vars.outputs.image_repo }}@${{ steps.build.outputs.digest }}
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          output-format: sarif
 
-      - name: Upload Trivy scan
+      - name: Upload Grype scan
         if: always()
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3
         with:
-          sarif_file: trivy-results.sarif
-          category: trivy-container
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: grype-container
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
