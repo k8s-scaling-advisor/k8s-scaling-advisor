@@ -1,0 +1,17 @@
+## Table of Contents
+
+- [Executive Summary](#executive-summary)
+- [Top Optimizations](#top-10)
+- [Namespace Rollup](#namespace-rollup)
+{% if pattern_groups -%}
+- [Pattern Groups](#pattern-groups) — fleet-wide chart fixes
+{% endif -%}
+- [Scaling Summary](#scaling-summary)
+- [Detailed Analysis](#detailed-analysis)
+{% for bucket in priority_buckets if bucket.workloads -%}
+    - [{{ bucket.label }} ({{ bucket.workloads | length }})](#{{ bucket.anchor }})
+{% endfor -%}
+- [Implementation Guide](#implementation-guide)
+
+---
+

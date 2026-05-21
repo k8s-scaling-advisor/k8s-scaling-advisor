@@ -1,0 +1,24 @@
+## <a id="namespace-rollup"></a>Namespace Rollup
+
+{% if namespace_rollups -%}
+| Namespace | Owner(s) | Workloads | P0 | P1 | P2 | INSUFF | CPU savings | Mem savings |
+|-----------|----------|----------:|---:|---:|---:|-------:|------------:|------------:|
+{% for r in namespace_rollups -%}
+| `{{ r.namespace }}` | {{ r.owners | join(", ") if r.owners else "_unattributed_" }} | {{ r.workload_count }} | {{ r.p0 }} | {{ r.p1 }} | {{ r.p2 }} | {{ r.insufficient_data }} | {{ format_cpu(r.cpu_savings_m) }} | {{ format_mem(r.mem_savings_mi) }} |
+{% endfor %}
+{% else -%}
+_No workloads collected._
+{% endif %}
+
+{% if graphs_dir -%}
+![Namespace risk heatmap]({{ graphs_dir }}/7_namespace_risk.png)
+
+_Stacked priority counts per namespace. Use this for team handoffs: who owns the most P0s?_
+
+![Fleet capacity — requested vs used]({{ graphs_dir }}/8_fleet_capacity.png)
+
+_Per top-10 namespace: solid bar = avg used; faded bar = requested but idle. Annotated % is utilization. Low-utilization namespaces are where the cluster is paying for empty._
+{% endif %}
+
+---
+

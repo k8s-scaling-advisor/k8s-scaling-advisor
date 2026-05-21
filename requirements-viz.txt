@@ -1,0 +1,11 @@
+# Visualization dependencies (optional)
+# Required only for graph generation (--graphs flag)
+#
+# Install with:
+#   pip install -r requirements-viz.txt
+# Or:
+#   pip install -e .[viz]
+
+pandas>=1.5.0
+matplotlib>=3.5.0
+numpy>=1.20.0

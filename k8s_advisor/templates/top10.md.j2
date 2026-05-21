@@ -1,0 +1,50 @@
+## <a id="top-10"></a>Top Optimizations
+
+{% if top.cpu -%}
+### Top {{ top.cpu | length }} CPU Savers
+
+| Rank | Namespace | Deployment | Savings |
+|-----:|-----------|------------|--------:|
+{% for e in top.cpu -%}
+| {{ loop.index }} | `{{ e.namespace }}` | `{{ e.deployment }}` | {{ format_cpu(e.value) }} |
+{% endfor %}
+{% endif -%}
+
+{% if top.mem -%}
+### Top {{ top.mem | length }} Memory Savers
+
+| Rank | Namespace | Deployment | Savings |
+|-----:|-----------|------------|--------:|
+{% for e in top.mem -%}
+| {{ loop.index }} | `{{ e.namespace }}` | `{{ e.deployment }}` | {{ format_mem(e.value) }} |
+{% endfor %}
+{% endif -%}
+
+{% if graphs_dir -%}
+![Top over-requested workloads]({{ graphs_dir }}/2_top_over_requested.png)
+
+_BURSTY (Prometheus/Cassandra/Kafka/ES), GC_RUNTIME (JVM/Node), and UNSTABLE workloads are excluded — their `avg`/P95 don't represent peak working set._
+
+![Top under-requested workloads]({{ graphs_dir }}/3_top_under_requested.png)
+
+_INSUFFICIENT_DATA workloads excluded. Sized off observed usage above the request floor._
+{% endif %}
+
+{% if top.risk -%}
+### Top {{ top.risk | length }} Highest Risk
+
+These are the workloads most likely to wake someone up at 2am. Triage these first.
+
+| Rank | Namespace | Deployment | Signals |
+|-----:|-----------|------------|---------|
+{% for e in top.risk -%}
+| {{ loop.index }} | `{{ e.namespace }}` | `{{ e.deployment }}` | {{ e.note }} |
+{% endfor %}
+{% endif %}
+
+{% if graphs_dir -%}
+![Stability — OOM kills and restart activity]({{ graphs_dir }}/6_stability_analysis.png)
+{% endif %}
+
+---
+

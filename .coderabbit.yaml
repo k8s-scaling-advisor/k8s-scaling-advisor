@@ -1,0 +1,43 @@
+# CodeRabbit configuration — Free tier (PR summaries only).
+# Reference: https://docs.coderabbit.ai/getting-started/configure-coderabbit
+#
+# To activate, install the GitHub App at https://github.com/apps/coderabbitai
+# and grant access to this repository. CodeRabbit picks up this file on the
+# next PR.
+
+language: "en-US"
+early_access: false
+
+reviews:
+  # Free tier: PR summary on every pull request. No line-by-line review
+  # (that's a paid feature).
+  high_level_summary: true
+  poem: false                    # opinionated default off — saves PR noise
+  review_status: true            # show summary status as a check
+
+  # Paid features — explicitly disabled so the config is honest about
+  # what's actually running.
+  request_changes_workflow: false
+  auto_review:
+    enabled: true
+    drafts: false                # don't review draft PRs
+    base_branches:
+      - main
+    # Skip bot-authored PRs from review queue.
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+    labels:
+      - "!skip-review"           # PRs labelled "skip-review" are skipped
+
+  # Path filters — skip generated/vendored content from review.
+  path_filters:
+    - "!**/__pycache__/**"
+    - "!**/.venv/**"
+    - "!**/venv/**"
+    - "!reports/**"
+    - "!examples/online-boutique.csv"
+    - "!examples/online-boutique.md"
+
+chat:
+  auto_reply: true               # reply to "@coderabbitai" mentions on PRs

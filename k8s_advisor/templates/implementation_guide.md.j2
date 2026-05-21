@@ -1,0 +1,93 @@
+## <a id="implementation-guide"></a>Implementation Guide
+
+### HPA Fleet-Wide Protection Policy
+
+Apply this standard `behavior` block to **all** HPAs to prevent thundering herd:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: <deployment-name>
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: <deployment-name>
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ hpa_target_default }}    # 70-80 keeps HPA proactive (>100 is reactive)
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Pods
+        value: 10                # Max 10 new pods per minute
+        periodSeconds: 60
+      - type: Percent
+        value: 50                # Or max 50% increase per minute
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Pods
+        value: 5
+        periodSeconds: 180
+      - type: Percent
+        value: 25
+        periodSeconds: 180
+      selectPolicy: Min
+```
+
+**Why this matters:**
+- Prevents API server overload from simultaneous pod creation
+- Avoids database connection pool exhaustion
+- Provides controlled, predictable scaling behavior
+
+### VPA Configuration
+
+For workloads recommended for VPA:
+
+```yaml
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: <deployment-name>-vpa
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: <deployment-name>
+  updatePolicy:
+    updateMode: "Off"           # Start with Off, validate for 24-48h
+  resourcePolicy:
+    containerPolicies:
+    - containerName: '*'
+      minAllowed:
+        cpu: 50m
+        memory: 16Mi
+      maxAllowed:
+        cpu: 4
+        memory: 8Gi
+```
+
+**VPA Modes:**
+- `Off`: Recommendations only (safe for validation)
+- `Auto`: Restart pods with new recommendations
+- `Recreate`: Like Auto (restart required)
+- `InPlaceOrRecreate`: In-place updates if supported (K8s 1.33+)
+
+### Rollout Strategy
+
+**Phase 1: P0 Fixes (Week 1)** — fix missing requests on active workloads, OOM kills, CPU throttling, unstable workloads.
+
+**Phase 2: HPA Rollout (Week 2-3)** — start with low-risk P2/P3 workloads, apply HPA behavior blocks, monitor 48h, expand gradually.
+
+**Phase 3: VPA & Optimization (Week 4+)** — enable VPA for single-replica workloads, harvest the savings from the Top 10 lists.

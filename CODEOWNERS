@@ -1,0 +1,25 @@
+# CODEOWNERS — required reviewers for protected branches.
+# Order matters; later rules override earlier ones for the same path.
+# Reference: https://docs.github.com/articles/about-code-owners
+#
+# Replace @k8s-scaling-advisor/maintainers with the team or user that owns
+# review approvals. Until you have a team, list yourself directly:
+#     *  @your-github-username
+
+# Default owner for everything in the repo
+*  @k8s-scaling-advisor/maintainers
+
+# Heightened review for analyzer logic — these files drive the
+# rightsizing recommendations admins act on.
+/k8s_advisor/simple_analyzer.py  @k8s-scaling-advisor/maintainers
+/k8s_advisor/constants.py        @k8s-scaling-advisor/maintainers
+/k8s_advisor/aggregations.py     @k8s-scaling-advisor/maintainers
+
+# CI / supply-chain — guard against malicious workflow PRs.
+/.github/workflows/              @k8s-scaling-advisor/maintainers
+/.github/dependabot.yml          @k8s-scaling-advisor/maintainers
+
+# Packaging / distribution — anything that affects what gets published.
+/setup.py                        @k8s-scaling-advisor/maintainers
+/pyproject.toml                  @k8s-scaling-advisor/maintainers
+/requirements*.txt               @k8s-scaling-advisor/maintainers

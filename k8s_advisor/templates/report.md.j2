@@ -1,0 +1,38 @@
+{% include "header.md.j2" %}
+{% include "toc.md.j2" %}
+{% include "executive_summary.md.j2" %}
+{% include "top10.md.j2" %}
+{% include "namespace_rollup.md.j2" %}
+{% include "pattern_groups.md.j2" %}
+
+## <a id="scaling-summary"></a>Scaling Approach Summary
+
+- **HPA Ready:** {{ counts.hpa }} workloads
+- **VPA Recommended:** {{ counts.vpa }} workloads
+- **HPA After Fixes:** {{ counts.hpa_after_fix }} workloads
+
+---
+
+## <a id="detailed-analysis"></a>Detailed Analysis
+
+{% for bucket in priority_buckets %}
+{%- if bucket.workloads %}
+### <a id="{{ bucket.anchor }}"></a>{{ bucket.label }} Priority ({{ bucket.workloads | length }} workloads)
+
+{% if bucket.label == "P0" -%}
+⚠️ **Must Fix:** Missing requests on active workloads, active CPU throttling, or confirmed OOM kills.
+
+{% elif bucket.label == "P1" -%}
+🟠 **High Priority:** Significant operational risk — frequent restarts, memory saturation.
+
+{% endif -%}
+
+{% for item in bucket.rendered -%}
+{% set analysis = item.analysis -%}
+{% set collapse_note = item.collapse_note -%}
+{% include "workload.md.j2" %}
+{% endfor %}
+{% endif -%}
+{% endfor %}
+
+{% include "implementation_guide.md.j2" %}

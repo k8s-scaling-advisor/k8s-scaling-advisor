@@ -1,0 +1,61 @@
+{% set markers = [] -%}
+{% if analysis.insufficient_data -%}{% set _ = markers.append("INSUFFICIENT_DATA") %}{% elif analysis.low_confidence -%}{% set _ = markers.append("LOW_CONFIDENCE") %}{% endif -%}
+{% if analysis.gc_runtime -%}{% set _ = markers.append("GC_RUNTIME") %}{% endif -%}
+{% if analysis.bursty_workload -%}{% set _ = markers.append("BURSTY_WORKLOAD") %}{% endif -%}
+{% set marker_str = (" — " + markers | join(" | ")) if markers else "" -%}
+#### `{{ analysis.namespace }}/{{ analysis.deployment }}` ({{ analysis.workload_type }}){{ marker_str }}
+
+{% if analysis.issues -%}
+**Issues:**
+{% for issue in analysis.issues -%}
+- {{ issue }}
+{% endfor %}
+
+{% endif -%}
+{% if analysis.owner -%}
+**Owner:** `{{ analysis.owner }}`
+
+{% endif -%}
+{% if analysis.crash_signal -%}
+**Crash signal:** {{ analysis.crash_signal }}
+
+{% endif -%}
+**Current:** CPU: {{ analysis.current_cpu }} | Memory: {{ analysis.current_mem }}
+
+{% if analysis.insufficient_data -%}
+**Recommended:** _N/A — see INSUFFICIENT_DATA action below_
+{% else -%}
+**Recommended:** CPU: {{ analysis.recommended_cpu }} | Memory: {{ analysis.recommended_mem }}
+{% endif %}
+
+**Scaling:** {{ analysis.scaling_approach.value }}
+
+{% if analysis.action_required != "No immediate action required" -%}
+**Actions:**
+{% for action in analysis.action_required.split("; ") -%}
+- {{ action }}
+{% endfor %}
+
+{% endif -%}
+{% if analysis.rationale -%}
+**Rationale:** {{ analysis.rationale }}
+
+{% endif -%}
+{% if collapse_note -%}
+> _{{ collapse_note }}_
+
+{% endif -%}
+{% if has_prometheus and analysis.priority.value in ("P0", "P1") and analysis.cpu_p95 > 0 -%}
+**Prometheus Metrics:**
+- CPU: Avg={{ analysis.avg_cpu | int }}m, P50={{ analysis.cpu_p50 | int }}m, P95={{ analysis.cpu_p95 | int }}m, Max={{ analysis.cpu_max | int }}m
+- Memory: Avg={{ analysis.avg_mem | int }}Mi, P50={{ analysis.mem_p50 | int }}Mi, P95={{ analysis.mem_p95 | int }}Mi, Max={{ analysis.mem_max | int }}Mi
+{% if analysis.cpu_throttle_pct > 0 -%}
+- CPU Throttling: {{ "%.1f" | format(analysis.cpu_throttle_pct) }}%
+{% endif -%}
+{% if analysis.mem_volatility_cv > 0 -%}
+- Memory Volatility: {{ "%.1f" | format(analysis.mem_volatility_cv) }}% CV
+{% endif %}
+
+{% endif -%}
+---
+

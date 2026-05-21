@@ -1,0 +1,26 @@
+{% if pattern_groups %}
+## <a id="pattern-groups"></a>Pattern Groups (fleet-wide chart fixes)
+
+These deployments share a name prefix and a priority bucket — usually instances
+of the same Helm chart or operator. **Fix the chart once instead of filing N
+separate tickets.**
+
+> Detail-section workloads in groups with N≥10 instances are collapsed below
+> the first card with a `+ N-1 identical instances` note. Click through to the
+> CSV for full per-instance metrics.
+
+| Namespace | Prefix | Priority | Count | CPU savings | CPU raises | Mem savings | Mem raises | INSUFF |
+|-----------|--------|----------|------:|------------:|-----------:|------------:|-----------:|-------:|
+{% for g in pattern_groups -%}
+| `{{ g.namespace }}` | `{{ g.prefix }}-*` | {{ g.priority }} | {{ g.workloads | length }} | {{ format_cpu(g.cpu_savings_m) }} | {{ format_cpu(g.cpu_raises_m) }} | {{ format_mem(g.mem_savings_mi) }} | {{ format_mem(g.mem_raises_mi) }} | {{ g.insufficient_data }} |
+{% endfor %}
+
+{% if graphs_dir -%}
+![Pattern group impact]({{ graphs_dir }}/9_pattern_group_impact.png)
+
+_Each bar = one pattern group (e.g. `rook-ceph-osd-*`). Bar length = how many tickets one chart fix would resolve. Color = priority._
+{% endif %}
+
+---
+
+{% endif %}

@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Local outputs
+reports/*.csv
+reports/*.md
+reports/graphs/*.png
+
+# Example data — allowlist only the committed public sample.
+# Any new *.csv / *.md under examples/ is ignored by default to prevent
+# accidentally committing data collected from a real cluster.
+examples/*.csv
+examples/*.md
+!examples/online-boutique.csv
+!examples/online-boutique.md
+!examples/README.md
+
+# Backup files
+*.backup
+
+# Environment
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+.cursor/
+.vscode/
+.idea/

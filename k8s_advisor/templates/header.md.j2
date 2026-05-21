@@ -1,0 +1,30 @@
+# K8s Scaling Advisor - Analysis Report
+
+**Generated:** {{ generated_at }}
+
+**Cluster:** `{{ cluster }}`
+
+**Total Workloads:** {{ analyses | length }}
+
+{% if has_prometheus -%}
+**Prometheus Metrics:** ✅ Available (Enhanced analysis with P95, P50, Max, StdDev, Volatility)
+{% else -%}
+**Prometheus Metrics:** ⚠️ Not available (Basic kubectl metrics-server analysis only)
+
+> **⚠️ LOW CONFIDENCE — kubectl-only mode.** metrics-server only exposes a ~60s rolling sample, so numeric recommendations below are based on a tiny data window. For production rightsizing, run with Prometheus enabled and **at least 7 days** of history. Workloads marked `INSUFFICIENT_DATA` were restarting or idle during collection — re-run when steady.
+{% endif %}
+{% if insufficient_count > 0 -%}
+> **{{ insufficient_count }} workload(s) flagged INSUFFICIENT_DATA.** No numeric recommendations were issued for those workloads (CrashLoop, restart-leak, or zero-signal). Investigate restart cause first.
+{% endif %}
+{% if data_quality_warnings -%}
+> **⚠️ Data-quality warnings.** Some Prometheus-derived columns have low coverage. The analyzer treats missing values as zero / "no signal", which can hide real issues. Re-run after Prometheus is healthy if the percentages below are surprising.
+>
+> | Column | N/A rate | Affected | Likely meaning |
+> |--------|---------:|---------:|----------------|
+{% for w in data_quality_warnings -%}
+> | `{{ w.column }}` | {{ "%.0f" | format(w.na_pct) }}% | {{ w.na_count }}/{{ w.total }} | {{ w.label }} signal unavailable for these workloads |
+{% endfor -%}
+{% endif %}
+
+---
+

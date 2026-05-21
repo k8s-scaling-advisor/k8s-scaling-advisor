@@ -1,0 +1,66 @@
+## <a id="executive-summary"></a>Executive Summary
+
+{% if manual_count > 0 -%}
+### ⚠️ Immediate Action Required
+
+**{{ manual_count }} workload(s) require immediate manual resource updates** before HPA/VPA can be enabled.
+**{{ counts.p0 }} P0 workload(s)** require immediate action: missing resource requests on active workloads, active CPU throttling, or confirmed OOM kills.
+
+**👉 [Jump to P0 Priority Section →](#p0)**
+
+{% endif -%}
+
+### Priority Distribution
+
+| Priority | Count | Description |
+|----------|------:|-------------|
+| **P0** | {{ counts.p0 }} | Must fix now — OOM, throttling, or missing requests on active workloads |
+| **P1** | {{ counts.p1 }} | High — frequent restarts, memory saturation, severe under-provisioning |
+| **P2** | {{ counts.p2 }} | Medium — resource optimization opportunities |
+| **P3** | {{ counts.p3 }} | Low — no significant issues |
+
+{% if graphs_dir -%}
+![Priority distribution]({{ graphs_dir }}/4_priority_distribution.png)
+{% endif -%}
+
+### Scaling Approach
+
+| Approach | Count | Description |
+|----------|------:|-------------|
+| **HPA** | {{ counts.hpa }} | Ready for Horizontal Pod Autoscaler |
+| **VPA** | {{ counts.vpa }} | Recommended for Vertical Pod Autoscaler |
+| **HPA_AFTER_FIX** | {{ counts.hpa_after_fix }} | HPA after fixing blockers |
+| **MANUAL** | {{ counts.manual }} | Manual resource updates only |
+| **NONE** | {{ counts.none_ }} | Excluded from autoscaling |
+
+_HPA workloads can optionally run VPA in `updateMode: Off` for continuous right-sizing insights._
+
+### Fleet-Wide Impact (if all recommendations applied)
+
+| Resource | Savings | Raises Required |
+|----------|--------:|----------------:|
+| CPU | {{ format_cpu(fleet_totals.cpu_savings_m) }} | {{ format_cpu(fleet_totals.cpu_raises_m) }} |
+| Memory | {{ format_mem(fleet_totals.mem_savings_mi) }} | {{ format_mem(fleet_totals.mem_raises_mi) }} |
+
+{% if issue_counts -%}
+### Common Issues
+
+| Issue | Count |
+|-------|------:|
+{% for issue, count in issue_counts -%}
+| {{ issue }} | {{ count }} |
+{% endfor %}
+{% endif -%}
+
+{% if graphs_dir -%}
+![Resource efficiency scatter]({{ graphs_dir }}/1_resource_efficiency.png)
+
+_Each dot is one workload. Bottom-left cluster = over-requested (waste). Outliers above 200% are labelled — those are under-provisioned and likely to throttle or OOM under load._
+
+![P95 vs request]({{ graphs_dir }}/10_p95_vs_request.png)
+
+_(Prometheus-only) Same workloads ranked by P95/request ratio. Anything above 1.0 on either axis is at OOM/throttle risk under load; bottom-left quadrant under 0.3 is clear waste. The fastest 'risk vs cost' read of the cluster._
+{% endif %}
+
+---
+
