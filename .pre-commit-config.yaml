@@ -1,0 +1,80 @@
+# Pre-commit hook configuration.
+#
+# Install once:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Then every `git commit` runs the hooks below against the staged files
+# only — typically <2s on touched-files diffs.
+#
+# Heavy security scanning (Semgrep, CodeQL) deliberately stays in CI:
+# - GHAS-side rulesets are larger and updated server-side, so a local
+#   pin would silently drift from the cloud truth.
+# - Semgrep cold-start is ~10s, slow enough to train people to commit
+#   with `--no-verify`.
+# What runs locally is fast, deterministic, and catches classes of
+# bugs the project has actually shipped (workflow-injection patterns,
+# bash quoting in scripts/, ruff-format drift, broken YAML).
+
+minimum_pre_commit_version: "3.5.0"
+# No `default_language_version` — let each developer's Python (3.10+,
+# matches the project floor) drive the hook environments. Pinning to
+# python3.12 here would force every contributor to install that minor.
+
+repos:
+  # ─── ruff: format + lint Python ──────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
+
+  # ─── tiny structural checks (whitespace, EOL, YAML, large files) ─
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Markdown's trailing-double-space-as-line-break is intentional
+        # in some places; ruff doesn't touch .md.
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # Helm chart templates use `{{ }}` Jinja-style that the YAML
+        # parser refuses (it expects a YAML !tag style). Skip them; the
+        # `helm lint` hook below covers chart correctness end-to-end.
+        exclude: ^charts/.+/templates/.+\.yaml$
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+      - id: check-executables-have-shebangs
+
+  # ─── actionlint: GitHub Actions workflow lint ───────────────────
+  # Catches workflow-injection patterns (the "use env: not interpolation"
+  # rule we hit during the auto-tag PRs), missing `permissions:` blocks,
+  # invalid expression syntax, etc.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  # ─── shellcheck: bash quality ────────────────────────────────────
+  # Targets scripts/*.sh + the inline scripts in workflow run: blocks
+  # (actionlint above already pipes those through shellcheck).
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
+
+  # ─── helm lint: chart correctness ────────────────────────────────
+  # The chart-lint CI job runs the same thing server-side; this just
+  # gives faster feedback. Kept opt-in via `stages: [manual]` so a
+  # developer who hasn't installed Helm can still commit normally —
+  # run with `pre-commit run --hook-stage manual --all-files` when
+  # touching the chart.
+  - repo: https://github.com/gruntwork-io/pre-commit
+    rev: v0.1.30
+    hooks:
+      - id: helmlint
+        files: ^charts/.+
+        stages: [manual]
