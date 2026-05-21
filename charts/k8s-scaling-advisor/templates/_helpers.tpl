@@ -49,7 +49,7 @@ Reproducibility / rollback safety > convenience.
 */ -}}
 {{- define "k8s-scaling-advisor.uploaderImage" -}}
 {{- $kind := .Values.uploader.kind -}}
-{{- $valid := list "s3" "slack" "http" -}}
+{{- $valid := list "s3" "slack" "http" "teams" -}}
 {{- if not (has $kind $valid) -}}
   {{- fail (printf "uploader.kind must be one of %v (got %q). The CronJob template only handles those values; an invalid kind would silently produce a no-op uploader." $valid $kind) -}}
 {{- end -}}
@@ -59,8 +59,13 @@ Reproducibility / rollback safety > convenience.
   {{- if eq $kind "s3" -}}
     {{- $repo = "amazon/aws-cli" -}}
     {{- if not $tag }}{{- $tag = "2.17.0" -}}{{- end -}}
+  {{- else if eq $kind "teams" -}}
+    {{- /* Teams Graph flow needs jq + python for JSON parsing.
+           azure-cli ships both plus `az` for future richness. */ -}}
+    {{- $repo = "mcr.microsoft.com/azure-cli" -}}
+    {{- if not $tag }}{{- $tag = "2.65.0" -}}{{- end -}}
   {{- else -}}
-    {{- /* slack and http both use curlimages/curl */ -}}
+    {{- /* slack and http use curlimages/curl (jq/python not needed). */ -}}
     {{- $repo = "curlimages/curl" -}}
     {{- if not $tag }}{{- $tag = "8.10.1" -}}{{- end -}}
   {{- end -}}

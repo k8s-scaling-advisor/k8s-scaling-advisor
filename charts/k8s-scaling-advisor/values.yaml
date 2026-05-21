@@ -138,12 +138,15 @@ reports:
 # that sentinel, ships the files, and exits.
 uploader:
   enabled: false
-  # One of: "s3", "slack", "http".
+  # One of: "s3", "slack", "http", "teams".
   # The chart picks a sensible default image per kind; override below.
   kind: s3
   image:
-    # Leave repository empty to use the per-kind default
-    # (s3: amazon/aws-cli, slack/http: curlimages/curl).
+    # Leave repository empty to use the per-kind default:
+    #   s3          -> amazon/aws-cli
+    #   slack/http  -> curlimages/curl
+    #   teams       -> mcr.microsoft.com/azure-cli (needs jq + python
+    #                  for Microsoft Graph response parsing)
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
@@ -192,6 +195,37 @@ uploader:
   http:
     url: ""
     headers: {}  # e.g., { Authorization: "Bearer ..." }
+
+  # ─── kind: teams ──────────────────────────────────────────────────
+  # Uploads the markdown report to a Teams channel's SharePoint Files
+  # tab via Microsoft Graph (client_credentials flow), then posts a
+  # channel message linking to it. See docs/DEPLOYMENT.md for the
+  # one-time Azure AD app + admin-consent setup; the chart needs:
+  #   - tenantId          (Azure AD tenant)
+  #   - clientId          (the AD app's application/client ID)
+  #   - teamId            (Teams team / group ID)
+  #   - channelId         (channel ID inside that team)
+  #   - clientSecretSecret.name / .key  (Secret holding the AD app's
+  #                                      client secret)
+  #
+  # AD app needs Application permissions:
+  #   Files.ReadWrite.All  (admin consent required)
+  #   ChannelMessage.Send  (admin consent required)
+  #
+  # Reports always upload as a real file to SharePoint; the channel
+  # message contains a short summary and the file's webUrl.
+  teams:
+    tenantId: ""
+    clientId: ""
+    teamId: ""
+    channelId: ""
+    clientSecretSecret:
+      name: ""
+      key: clientSecret
+    # Optional message prefix posted with the link.
+    messagePrefix: "K8s Scaling Advisor report"
+    # If true, only upload the .md report (skip CSV / JSON / PNGs).
+    markdownOnly: true
 
   extraEnv: []
   # Mount additional secrets (e.g., for static AWS creds, custom CAs).

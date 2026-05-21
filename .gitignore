@@ -21,10 +21,11 @@ htmlcov/
 .coverage
 coverage.xml
 
-# Local outputs
-reports/*.csv
-reports/*.md
-reports/graphs/*.png
+# Local outputs — ignore everything inside reports/ except .gitkeep
+# (which keeps the directory tracked so fresh clones see the convention).
+reports/*
+!reports/.gitkeep
+reports/graphs/
 
 # Example data — allowlist only the committed public sample.
 # Any new *.csv / *.md under examples/ is ignored by default to prevent

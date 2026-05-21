@@ -10,6 +10,15 @@ on:
         description: "Optional image tag override (default: git tag/SHA)"
         required: false
         type: string
+  # Triggered by `auto-tag-on-release-label.yml` after it pushes a tag.
+  # Required because tag pushes performed via the runner's GITHUB_TOKEN
+  # do NOT trigger downstream workflows (documented GitHub safeguard).
+  # `workflow_run` runs in the default branch's context — the job
+  # below resolves the actual tag at runtime via `git for-each-ref`.
+  workflow_run:
+    workflows: ["Auto-tag merged release PR"]
+    types: [completed]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -23,23 +32,86 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Cheap gate that runs only on workflow_run. Downloads the release-meta
+  # artifact the upstream auto-tag wrote and decides whether this is an
+  # actual release or a clean skip (tag already existed). Other trigger
+  # types (push: tags, workflow_dispatch) bypass this entirely.
+  resolve-trigger:
+    name: Resolve release trigger
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Download release-meta artifact
+        if: github.event.workflow_run.conclusion == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: release-tag
+          path: ./release-meta
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read status
+        id: check
+        run: |
+          # If the upstream auto-tag workflow failed, conclusion != success
+          # and the download step above was skipped — treat as "no release".
+          if [ ! -f release-meta/status ]; then
+            echo "::notice::upstream auto-tag run did not produce a release-meta artifact (conclusion=${{ github.event.workflow_run.conclusion }}); skipping"
+            echo "proceed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          STATUS="$(cat release-meta/status)"
+          case "$STATUS" in
+            release)
+              echo "::notice::auto-tag pushed a release; proceeding"
+              echo "proceed=true" >> "${GITHUB_OUTPUT}"
+              ;;
+            skipped)
+              echo "::notice::auto-tag exited cleanly without a new tag (status=skipped); skipping"
+              echo "proceed=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "::error::unknown release-meta/status value: ${STATUS}"
+              exit 1
+              ;;
+          esac
+
   build-sign-publish:
     name: Build, scan, sign, publish image
+    # workflow_run path goes through the resolve-trigger gate first.
+    # push: tags / workflow_dispatch always proceed.
+    needs: [resolve-trigger]
+    if: >-
+      always() &&
+      (github.event_name != 'workflow_run' ||
+       (needs.resolve-trigger.result == 'success' &&
+        needs.resolve-trigger.outputs.proceed == 'true'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
       security-events: write
+      actions: read   # download-artifact needs this for cross-run reads
     outputs:
       image_ref: ${{ steps.export.outputs.image_ref }}
       image_digest: ${{ steps.export.outputs.image_digest }}
       chart_ref: ${{ steps.export.outputs.chart_ref }}
       chart_version: ${{ steps.export.outputs.chart_version }}
+      release_tag: ${{ steps.vars.outputs.image_tag }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Need full history + tags so the workflow_run path can
+          # resolve the most-recent v* tag the auto-tag workflow just
+          # pushed. Cheap; fetched once per release run.
+          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
@@ -54,18 +126,58 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Pull the tag value the upstream auto-tag workflow recorded.
+      # Only runs on the workflow_run path; the upstream wrote a
+      # one-line file via actions/upload-artifact called `release-tag`.
+      # Using an artifact (rather than `git for-each-ref` to discover
+      # the latest tag) makes tag selection deterministic — a manual
+      # `git tag v0.0.9-hotfix && git push --tags` racing in between
+      # the auto-tag push and this step can't redirect the build.
+      - name: Download upstream release-tag artifact
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: release-tag
+          path: ./release-meta
+          # `workflow_run` artifacts live on the *triggering* run, not
+          # the current one — point download-artifact at it explicitly.
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Compute release variables
         id: vars
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_TAG: ${{ github.event.inputs.tag || '' }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
         run: |
+          # Three trigger paths:
+          #   1. workflow_dispatch with `tag` input -> use it verbatim.
+          #   2. push: tags     -> derive from the pushed tag's name.
+          #   3. workflow_run   -> read the tag the upstream workflow
+          #                       recorded into the release-tag artifact
+          #                       (deterministic, race-free).
           if [ -n "${INPUT_TAG}" ]; then
             IMAGE_TAG="${INPUT_TAG}"
           elif [ "${REF_TYPE}" = "tag" ]; then
             IMAGE_TAG="${REF_NAME#v}"
+          elif [ "${EVENT_NAME}" = "workflow_run" ]; then
+            if [ ! -f release-meta/tag ]; then
+              echo "::error::workflow_run trigger but no release-tag artifact"
+              exit 1
+            fi
+            UPSTREAM_TAG="$(cat release-meta/tag)"
+            if [ -z "${UPSTREAM_TAG}" ]; then
+              echo "::error::release-tag artifact is empty"
+              exit 1
+            fi
+            git fetch origin "refs/tags/${UPSTREAM_TAG}:refs/tags/${UPSTREAM_TAG}" --no-tags
+            # Check out the tag so the build is reproducible against
+            # the tagged tree, not whatever main happens to be now.
+            git checkout "${UPSTREAM_TAG}"
+            IMAGE_TAG="${UPSTREAM_TAG#v}"
           else
             IMAGE_TAG="${SHA::12}"
           fi
@@ -141,20 +253,57 @@ jobs:
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
+          EVENT_NAME: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+          IMAGE_REPO: ${{ steps.vars.outputs.image_repo }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          set -eu
           OWNER_LC="$(printf '%s' "${REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           CHART_REPO_OCI="oci://${REGISTRY}/${OWNER_LC}/charts"
-          CHART_VERSION="$(awk '/^version:/ {print $2; exit}' charts/k8s-scaling-advisor/Chart.yaml)"
-          # On a tag push, sync the chart version to the tag so users can ask
-          # for `--version v1.2.3` directly.
-          if [ "${REF_TYPE}" = "tag" ]; then
-            CHART_VERSION="${REF_NAME#v}"
-            sed -i "s/^version:.*/version: ${CHART_VERSION}/" charts/k8s-scaling-advisor/Chart.yaml
+          CHART_DIR="charts/k8s-scaling-advisor"
+          CHART_YAML="${CHART_DIR}/Chart.yaml"
+          VALUES_YAML="${CHART_DIR}/values.yaml"
+
+          CHART_VERSION="$(awk '/^version:/ {print $2; exit}' "${CHART_YAML}")"
+
+          # Decide whether this run is a "real" tagged release. Both
+          # `push: tags` (manual `git tag && git push --tags`) and
+          # `workflow_run` from auto-tag-on-release-label.yml count.
+          IS_TAG_RELEASE="false"
+          if [ "${REF_TYPE}" = "tag" ] || [ "${EVENT_NAME}" = "workflow_run" ]; then
+            IS_TAG_RELEASE="true"
           fi
+
+          # ─── Mutations to the runner's checkout (NOT committed back) ───
+          # The `.tgz` we publish reflects these edits; the source tree
+          # on `main` keeps its empty defaults so contributors aren't
+          # forever rebasing past auto-edits.
+
+          if [ "${IS_TAG_RELEASE}" = "true" ]; then
+            # Tagged release: chart version + appVersion sync to the tag.
+            # Pin image.tag so default `helm install` lands on the
+            # human-readable semver. Leave image.digest empty — the tag
+            # is itself the durable artifact.
+            CHART_VERSION="${IMAGE_TAG}"
+            sed -i "s|^version:.*|version: ${CHART_VERSION}|" "${CHART_YAML}"
+            sed -i "s|^appVersion:.*|appVersion: \"${CHART_VERSION}\"|" "${CHART_YAML}"
+            sed -i "s|^  tag: .*|  tag: \"${IMAGE_TAG}\"|" "${VALUES_YAML}"
+            sed -i "s|^  digest: .*|  digest: \"\"|" "${VALUES_YAML}"
+            echo "::notice::Tagged release: chart pinned to image.tag=${IMAGE_TAG}"
+          else
+            # Ad-hoc workflow_dispatch rebuild: no semver to point at.
+            # Pin image.digest so the chart is still reproducible; leave
+            # image.tag empty so it doesn't conflict with the digest.
+            sed -i "s|^  tag: .*|  tag: \"\"|" "${VALUES_YAML}"
+            sed -i "s|^  digest: .*|  digest: \"${IMAGE_DIGEST}\"|" "${VALUES_YAML}"
+            echo "::notice::Non-release rebuild: chart pinned to image.digest=${IMAGE_DIGEST}"
+          fi
+
           echo "${REGISTRY_TOKEN}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USER}" --password-stdin
-          helm package charts/k8s-scaling-advisor --destination ./.chart-out
+          helm package "${CHART_DIR}" --destination ./.chart-out
           helm push "./.chart-out/k8s-scaling-advisor-${CHART_VERSION}.tgz" "${CHART_REPO_OCI}"
           {
             echo "chart_version=${CHART_VERSION}"
@@ -202,7 +351,10 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: build-sign-publish
-    if: github.ref_type == 'tag'
+    # Run on real tag pushes AND on workflow_run from auto-tag (where
+    # the build job resolved the tag at runtime). Skip on
+    # workflow_dispatch — those are ad-hoc rebuilds, not Releases.
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_run'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -215,10 +367,16 @@ jobs:
           CHART_REF: ${{ needs.build-sign-publish.outputs.chart_ref }}
           CHART_VERSION: ${{ needs.build-sign-publish.outputs.chart_version }}
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          # `release_tag` is the un-prefixed version that the build job
+          # resolved (handles all three trigger paths). Prefix with `v`
+          # for tag_name / Release name below.
+          VERSION: ${{ needs.build-sign-publish.outputs.release_tag }}
           REGISTRY_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          VERSION="${TAG#v}"
+          TAG="v${VERSION}"
+          {
+            echo "tag=${TAG}"
+          } >> "${GITHUB_OUTPUT}"
           {
             echo "## Container image"
             echo
@@ -274,8 +432,8 @@ jobs:
       - name: Publish Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ steps.notes.outputs.tag }}
+          name: ${{ steps.notes.outputs.tag }}
           body_path: ${{ steps.notes.outputs.body_path }}
           generate_release_notes: true
           fail_on_unmatched_files: true

@@ -135,14 +135,14 @@ volume. The advisor produces:
 Once the Job pod terminates, the `emptyDir` is gone. Three ways to
 keep the reports:
 
-- **Production:** enable the [uploader sidecar](#6-uploader-sidecar-s3-slack-http)
-  (next section) — ships files to S3 / Slack / HTTP before the pod exits.
+- **Production:** enable the [uploader sidecar](#6-uploader-sidecar-s3-slack-http-teams)
+  (next section) — ships files to S3 / Slack / HTTP / Teams before the pod exits.
 - **Ad-hoc:** [debug mode](#7-debug-mode-fetch-reports-from-a-finished-pod)
   keeps the pod alive for 30 min so you can `kubectl debug` + `kubectl cp`.
 - **Quick check:** `kubectl logs <job-pod>` shows summary stats and report
   paths but not the full markdown content.
 
-## 6) Uploader sidecar (S3, Slack, HTTP)
+## 6) Uploader sidecar (S3, Slack, HTTP, Teams)
 
 Opt-in via `uploader.enabled=true`. Uses a Kubernetes 1.29+ native
 sidecar (initContainer with `restartPolicy: Always`) so the pod
@@ -225,6 +225,84 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   --set 'uploader.http.headers.Authorization=Bearer <token>'
 ```
 
+### Microsoft Teams (with SharePoint upload)
+
+The Teams uploader uses the **Microsoft Graph API** to upload reports
+to a channel's **Files** tab (which is a SharePoint document library
+behind the scenes), then posts a chat message in that channel linking
+to the freshly-uploaded files.
+
+This is heavier to set up than Slack — Teams doesn't expose a simple
+incoming webhook for file delivery, so we go through Azure AD
+client-credentials. One-time setup, then it works on every release.
+
+#### Azure AD app setup (one-time, requires tenant admin)
+
+1. Go to `https://portal.azure.com` → **Microsoft Entra ID** →
+   **App registrations** → **New registration**.
+   - Name: `k8s-scaling-advisor` (any).
+   - Supported account types: **Accounts in this organizational
+     directory only** (single tenant).
+   - Click **Register**.
+2. Note the **Application (client) ID** and **Directory (tenant) ID**
+   from the Overview page.
+3. **API permissions** → **Add a permission** → **Microsoft Graph**
+   → **Application permissions**:
+   - `Files.ReadWrite.All`
+   - `ChannelMessage.Send`
+4. Click **Grant admin consent for <tenant>**. Both permissions must
+   show **Granted** (green checkmark).
+5. **Certificates & secrets** → **New client secret**.
+   - Description: anything; Expires: pick the longest acceptable for
+     your security policy (24 months max).
+   - **Copy the Value** immediately. You won't see it again.
+
+#### Resolve team and channel IDs
+
+In Teams, click the channel → **More options** (⋯) → **Get link to
+channel**. The link looks like:
+
+```text
+https://teams.microsoft.com/l/channel/19%3a<CHANNEL_ID>%40thread.tacv2/
+General?groupId=<TEAM_ID>&tenantId=<TENANT_ID>
+```
+
+URL-decode `<CHANNEL_ID>` — the colons (`%3a`) become `:`, the at-sign
+(`%40`) becomes `@`. The result starts with `19:` and ends with
+`@thread.tacv2`.
+
+#### Create the Kubernetes Secret
+
+```bash
+kubectl create secret generic teams-graph-secret \
+  -n platform-observability \
+  --from-literal=clientSecret='<the-secret-Value-from-step-5>'
+```
+
+#### Install with Teams uploader enabled
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set uploader.enabled=true \
+  --set uploader.kind=teams \
+  --set uploader.teams.tenantId=<DIRECTORY_TENANT_ID> \
+  --set uploader.teams.clientId=<APPLICATION_CLIENT_ID> \
+  --set uploader.teams.teamId=<TEAM_ID> \
+  --set uploader.teams.channelId='<CHANNEL_ID>' \
+  --set uploader.teams.clientSecretSecret.name=teams-graph-secret
+```
+
+Default `uploader.teams.markdownOnly=true` — only the `.md` report
+gets uploaded to keep the channel readable. Set to `false` to also
+ship CSV / JSON / PNGs.
+
+The default sidecar image for `kind: teams` is
+`mcr.microsoft.com/azure-cli` (it ships `jq` and `python3` which the
+upload script needs). Override with `uploader.image.repository` /
+`.tag` if your environment requires an internal mirror.
+
 ## 7) Debug mode: fetch reports from a finished pod
 
 A Job pod that finishes its work is reaped quickly and its `emptyDir`
@@ -233,6 +311,13 @@ A Job pod that finishes its work is reaped quickly and its `emptyDir`
 (configurable via `debug.keepAliveSeconds`) after writing the reports,
 so you have a window to `kubectl exec` / `kubectl cp` them out.
 
+This is intentionally manual — production should use the
+[uploader sidecar](#6-uploader-sidecar-s3-slack-http-teams), which never
+needs human intervention. Debug mode is for "I want to look at one
+specific run on this cluster, right now."
+
+### Step 1: install with debug.keepAlive enabled
+
 ```bash
 helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   -n platform-observability --create-namespace \
@@ -240,24 +325,81 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   --set debug.keepAlive=true
 ```
 
-The pod's stdout will print `kubectl` commands with the resolved pod
-name once the analysis finishes:
+### Step 2: trigger a run (don't wait for the schedule)
 
 ```bash
-# Look at the live log to find the recipe
-kubectl logs -n platform-observability -l app.kubernetes.io/name=k8s-scaling-advisor
-
-# It prints something like:
-# [debug] kubectl exec -n platform-observability k8s-advisor-...-abc12 -- ls /app/reports
-# [debug] kubectl cp -n platform-observability k8s-advisor-...-abc12:/app/reports ./local-reports
-
-# Run those, and the reports land locally.
+JOB="k8s-advisor-debug-$(date +%s)"
+kubectl create job --from=cronjob/k8s-scaling-advisor "$JOB" \
+  -n platform-observability
+echo "JOB=$JOB"
 ```
 
-This is intentionally manual — production should use the
-[uploader sidecar](#6-uploader-sidecar-s3-slack-http), which never
-needs human intervention. Debug mode is for "I want to look at one
-specific run on this cluster, right now."
+### Step 3: wait until the analysis finishes and the pod enters its sleep window
+
+Poll the log until you see the `[debug] sleeping ...` banner:
+
+```bash
+# Tail logs as the job runs; ^C once you see "sleeping NNNs":
+kubectl logs -n platform-observability \
+  -l "batch.kubernetes.io/job-name=$JOB" -f
+
+# Last lines you'll see:
+#   ✅ Markdown report: /app/reports/k8s-advisor_<cluster>_<ts>.md
+#   ✅ JSON report: /app/reports/k8s-advisor_<cluster>_<ts>.json
+#   📊 Graphs: /app/reports/graphs/
+#   [debug] advisor exited rc=0; sleeping 1800s for kubectl exec / kubectl cp
+#   [debug] kubectl exec -n platform-observability <pod> -- ls /app/reports
+#   [debug] kubectl cp -n platform-observability <pod>:/app/reports ./local-reports
+```
+
+The two `[debug]` lines have the resolved pod name baked in via the
+chart's downward-API env vars — copy/paste them rather than typing.
+
+### Step 4: copy the reports to your laptop
+
+```bash
+POD="$(kubectl get pods -n platform-observability \
+  -l "batch.kubernetes.io/job-name=$JOB" \
+  -o jsonpath='{.items[0].metadata.name}')"
+
+# Optional: list before copying
+kubectl exec -n platform-observability "$POD" -- ls -la /app/reports
+
+# Copy the whole reports dir down
+kubectl cp -n platform-observability \
+  "$POD":/app/reports ./reports-from-debug
+```
+
+You'll get the full set: CSV, markdown, JSON, and the graphs/ subdir.
+
+### Step 5: clean up
+
+The pod will exit on its own when `debug.keepAliveSeconds` runs out.
+To stop it sooner:
+
+```bash
+kubectl delete job "$JOB" -n platform-observability
+```
+
+To turn debug mode off for the next run:
+
+```bash
+helm upgrade k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability \
+  --reuse-values \
+  --set debug.keepAlive=false
+```
+
+### Notes on what debug mode changes
+
+When `debug.keepAlive=true`:
+- The main container's `command` is wrapped in `/bin/sh -c '... && sleep N'`,
+  so the pod stays in `Running` after the advisor finishes instead of
+  immediately going to `Completed`.
+- `POD_NAME` and `POD_NAMESPACE` are injected via the downward API so the
+  printed `kubectl` commands have real values, not placeholders.
+- Nothing else changes: same image, same RBAC, same args. The reports
+  are written to the same `/app/reports` `emptyDir`.
 
 ## 8) Verify published image signature (optional, recommended)
 

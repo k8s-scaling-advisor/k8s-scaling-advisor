@@ -17,6 +17,94 @@ The report structure stays consistent in both modes.
 - Offline sample walkthrough: `examples/README.md`
 - Contributor guide: `CONTRIBUTING.md`
 
+## How to run it
+
+Two ways. They produce identical reports; only the *delivery* path differs.
+
+| | **Outside the cluster** (laptop / CI / VM) | **Inside the cluster** (Helm chart CronJob) |
+|---|---|---|
+| Install | `pip install -e ".[viz]"` (one-time) | `helm install ...` from local checkout or OCI artifact |
+| Auth | Your kubeconfig context | In-cluster ServiceAccount (RBAC from chart) |
+| Trigger | `k8s-advisor report ...` on demand | Daily cron, or `kubectl create job --from=cronjob/...` |
+| Reports land in | `./reports/` on your machine | `/app/reports` in an ephemeral `emptyDir` |
+| Retrieval | Already on disk — open with any editor | Pick one: uploader sidecar (S3 / Slack / HTTP / Teams) **or** debug mode (sleeps the pod for 30 min so you can `kubectl cp`) |
+| Best for | Investigations, one-off audits, CI integration tests | Continuous monitoring, automated delivery to a channel/bucket |
+| Doc | `docs/GETTING_STARTED.md` | `docs/DEPLOYMENT.md` |
+
+### Outside (laptop / CI / VM)
+
+```bash
+# Quickstart
+git clone https://github.com/<owner>/k8s-scaling-advisor.git
+cd k8s-scaling-advisor && pip install -e ".[viz]"
+
+# Run against the active kubeconfig context
+k8s-advisor report -n my-namespace --format md,json --graphs
+
+# Reports land at:
+#   reports/k8s-advisor_<cluster>_<timestamp>.csv  (raw collection)
+#   reports/k8s-advisor_<cluster>_<timestamp>.md   (markdown summary)
+#   reports/k8s-advisor_<cluster>_<timestamp>.json (machine-readable)
+#   reports/graphs/*.png                           (with --graphs)
+```
+
+Full walkthrough including the offline `analyze` flow:
+[`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
+
+### Inside the cluster (Helm chart CronJob)
+
+```bash
+helm upgrade --install k8s-scaling-advisor \
+  oci://ghcr.io/<owner>/charts/k8s-scaling-advisor \
+  --version <chart-version> \
+  -n platform-observability --create-namespace
+```
+
+The CronJob writes reports to `/app/reports` inside its Pod's
+`emptyDir`. The Pod is reaped quickly after the analysis completes,
+taking the volume with it — pick **one** retrieval mode at install time:
+
+#### Production retrieval — uploader sidecar
+
+Ship every run's reports to durable storage automatically. Set
+`uploader.enabled=true` and pick a kind:
+
+| `uploader.kind` | Where reports go | Setup cost |
+|---|---|---|
+| `s3` | An S3 bucket (or S3-compatible: MinIO, R2, GCS via HMAC) | IRSA / pod identity OR static access keys |
+| `slack` | Slack channel via `files.upload` | Bot token in a Secret + channel ID |
+| `http` | Generic webhook (`multipart/form-data`) | URL + optional auth headers |
+| `teams` | Teams channel's Files tab (SharePoint), with chat post | Azure AD app + admin consent + client secret |
+
+A Kubernetes 1.29+ native sidecar polls for the `.done` sentinel,
+ships the files, and exits — the Pod terminates cleanly. Per-kind
+walkthroughs (S3 IRSA, Slack token, Azure AD setup, etc.) are in
+[`docs/DEPLOYMENT.md` § 6](docs/DEPLOYMENT.md#6-uploader-sidecar-s3-slack-http-teams).
+
+#### Ad-hoc retrieval — debug mode
+
+For one-off investigation when you don't want to set up a sidecar:
+
+```bash
+helm upgrade k8s-scaling-advisor ... --reuse-values --set debug.keepAlive=true
+kubectl create job --from=cronjob/k8s-scaling-advisor my-debug-run -n platform-observability
+
+# The Pod prints a copy/pasteable kubectl recipe in its log;
+# follow it to `kubectl cp` the reports to your laptop.
+```
+
+Full 5-step recipe in
+[`docs/DEPLOYMENT.md` § 7](docs/DEPLOYMENT.md#7-debug-mode-fetch-reports-from-a-finished-pod).
+Default `debug.keepAliveSeconds` is 1800 (30 min). Production should
+leave debug mode off and use the sidecar.
+
+#### Quick-and-dirty — `kubectl logs`
+
+Free, but limited: shows summary stats (P0/P1 counts, file paths)
+and the textual analysis preamble. The full markdown body and the
+PNG graphs aren't echoed to stdout. Fine for "did anything explode";
+not enough for "show me the recommendations."
+
 ## What It Does
 
 - Collects per-workload CPU/memory requests, limits, usage, restart, HPA, PVC, and metadata into CSV
@@ -122,8 +210,13 @@ k8s-advisor report --namespace-pattern 'app-*' --graphs
 ## Output Files
 
 - CSV: `reports/k8s-advisor_<cluster>_<timestamp>.csv`
-- Markdown: `reports/k8s-advisor_<cluster>_<timestamp>.md`
-- Graphs (optional): `reports/graphs/*.png`
+- Markdown (default): `reports/k8s-advisor_<cluster>_<timestamp>.md`
+- JSON (machine-readable, opt-in via `--format json` or `--format md,json`):
+  `reports/k8s-advisor_<cluster>_<timestamp>.json`
+- Graphs (optional, with `--graphs`): `reports/graphs/*.png`
+
+For in-cluster runs, see `docs/DEPLOYMENT.md` § 5 (where reports live)
+and § 6 (uploader sidecar — S3 / Slack / HTTP / Teams).
 
 ## Report Priorities
 

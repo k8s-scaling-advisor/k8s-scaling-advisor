@@ -116,6 +116,80 @@ spec:
                       "$HTTP_URL"
                     echo
                   done
+                  {{- else if eq .Values.uploader.kind "teams" }}
+                  # Microsoft Graph 3-step flow:
+                  #   1. POST /oauth2/v2.0/token  (client_credentials)
+                  #   2. PUT  /drives/{}/items/{}:/<f>:/content  (file upload)
+                  #   3. POST /teams/{}/channels/{}/messages     (chat post with link)
+                  # The image is mcr.microsoft.com/azure-cli which ships
+                  # jq + python; the json parsing below uses jq.
+                  : "${TEAMS_TENANT_ID:?TEAMS_TENANT_ID must be set}"
+                  : "${TEAMS_CLIENT_ID:?TEAMS_CLIENT_ID must be set}"
+                  : "${TEAMS_CLIENT_SECRET:?TEAMS_CLIENT_SECRET must be set}"
+                  : "${TEAMS_TEAM_ID:?TEAMS_TEAM_ID must be set}"
+                  : "${TEAMS_CHANNEL_ID:?TEAMS_CHANNEL_ID must be set}"
+
+                  echo "[uploader] requesting Graph token"
+                  ACCESS_TOKEN="$(curl -fsS -X POST \
+                    -H 'Content-Type: application/x-www-form-urlencoded' \
+                    --data-urlencode "client_id=${TEAMS_CLIENT_ID}" \
+                    --data-urlencode "client_secret=${TEAMS_CLIENT_SECRET}" \
+                    --data-urlencode 'scope=https://graph.microsoft.com/.default' \
+                    --data-urlencode 'grant_type=client_credentials' \
+                    "https://login.microsoftonline.com/${TEAMS_TENANT_ID}/oauth2/v2.0/token" \
+                    | jq -er '.access_token')"
+
+                  echo "[uploader] resolving channel filesFolder"
+                  FOLDER_JSON="$(curl -fsS \
+                    -H "Authorization: Bearer $ACCESS_TOKEN" \
+                    "https://graph.microsoft.com/v1.0/teams/${TEAMS_TEAM_ID}/channels/${TEAMS_CHANNEL_ID}/filesFolder")"
+                  DRIVE_ID="$(printf '%s' "$FOLDER_JSON" | jq -er '.parentReference.driveId')"
+                  FOLDER_ID="$(printf '%s' "$FOLDER_JSON" | jq -er '.id')"
+
+                  cd "$REPORTS"
+                  PATTERN='*'
+                  if [ "${TEAMS_MARKDOWN_ONLY:-true}" = "true" ]; then PATTERN='*.md'; fi
+
+                  # Build the message body's HTML link list as we go.
+                  LINKS_FILE="$(mktemp)"
+                  for f in $(find . -type f -name "$PATTERN" ! -name '.done' | sed 's|^\./||'); do
+                    [ -z "$f" ] && continue
+                    echo "[uploader] uploading $f to SharePoint"
+                    WEB_URL="$(curl -fsS -X PUT \
+                      -H "Authorization: Bearer $ACCESS_TOKEN" \
+                      -H 'Content-Type: application/octet-stream' \
+                      --data-binary @"$f" \
+                      "https://graph.microsoft.com/v1.0/drives/${DRIVE_ID}/items/${FOLDER_ID}:/${f}:/content" \
+                      | jq -er '.webUrl')"
+                    # Each link as one HTML <li>, escaped via jq -Rs to
+                    # protect against filenames containing < > & etc.
+                    NAME_HTML="$(printf '%s' "$f" | jq -Rs '.[0:-1] | @html')"
+                    URL_HTML="$(printf '%s' "$WEB_URL" | jq -Rs '.[0:-1] | @html')"
+                    printf '<li><a href=%s>%s</a></li>' "$URL_HTML" "$NAME_HTML" >> "$LINKS_FILE"
+                  done
+
+                  if [ ! -s "$LINKS_FILE" ]; then
+                    echo "[uploader] no files matched pattern $PATTERN — nothing to post" >&2
+                    exit 1
+                  fi
+
+                  echo "[uploader] posting channel message"
+                  PREFIX="${TEAMS_MESSAGE_PREFIX:-K8s Scaling Advisor report}"
+                  PREFIX_HTML="$(printf '%s' "$PREFIX" | jq -Rs '.[0:-1] | @html')"
+                  MSG_HTML="<p>${PREFIX_HTML}</p><ul>$(cat "$LINKS_FILE")</ul>"
+                  rm -f "$LINKS_FILE"
+
+                  MSG_BODY="$(jq -nc --arg html "$MSG_HTML" '{body:{contentType:"html", content:$html}}')"
+                  POST_RESP="$(curl -fsS -X POST \
+                    -H "Authorization: Bearer $ACCESS_TOKEN" \
+                    -H 'Content-Type: application/json' \
+                    -d "$MSG_BODY" \
+                    "https://graph.microsoft.com/v1.0/teams/${TEAMS_TEAM_ID}/channels/${TEAMS_CHANNEL_ID}/messages")"
+                  printf '%s' "$POST_RESP" | jq -e '.id' >/dev/null || {
+                    echo "[uploader] channel message post failed: $POST_RESP" >&2
+                    exit 1
+                  }
+                  echo "[uploader] Teams post complete"
                   {{- end }}
                   echo "[uploader] done"
               env:
@@ -147,6 +221,24 @@ spec:
                 {{- else if eq .Values.uploader.kind "http" }}
                 - name: HTTP_URL
                   value: {{ .Values.uploader.http.url | quote }}
+                {{- else if eq .Values.uploader.kind "teams" }}
+                - name: TEAMS_TENANT_ID
+                  value: {{ .Values.uploader.teams.tenantId | quote }}
+                - name: TEAMS_CLIENT_ID
+                  value: {{ .Values.uploader.teams.clientId | quote }}
+                - name: TEAMS_TEAM_ID
+                  value: {{ .Values.uploader.teams.teamId | quote }}
+                - name: TEAMS_CHANNEL_ID
+                  value: {{ .Values.uploader.teams.channelId | quote }}
+                - name: TEAMS_MESSAGE_PREFIX
+                  value: {{ .Values.uploader.teams.messagePrefix | quote }}
+                - name: TEAMS_MARKDOWN_ONLY
+                  value: {{ .Values.uploader.teams.markdownOnly | quote }}
+                - name: TEAMS_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.uploader.teams.clientSecretSecret.name | quote }}
+                      key: {{ .Values.uploader.teams.clientSecretSecret.key | quote }}
                 {{- end }}
                 {{- with .Values.uploader.extraEnv }}
                 {{- toYaml . | nindent 16 }}
