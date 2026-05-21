@@ -7,5 +7,5 @@
 # - `analyze` can run offline from an existing CSV.
 
 kubernetes>=12.0.0
-jinja2>=3.0.0
+jinja2>=3.1.6
 
