@@ -161,3 +161,79 @@ jobs:
         with:
           name: image-release
           path: image-release.txt
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-sign-publish
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Compose release notes
+        id: notes
+        env:
+          IMAGE_REF: ${{ needs.build-sign-publish.outputs.image_ref }}
+          IMAGE_DIGEST: ${{ needs.build-sign-publish.outputs.image_digest }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          REGISTRY_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          VERSION="${TAG#v}"
+          {
+            echo "## Container image"
+            echo
+            echo "Pinned by digest (recommended for production):"
+            echo
+            echo '```bash'
+            echo "docker pull ${IMAGE_REF}"
+            echo '```'
+            echo
+            echo "Or by tag:"
+            echo
+            echo '```bash'
+            echo "docker pull ${REGISTRY_IMAGE}:${VERSION}"
+            echo '```'
+            echo
+            echo "## Helm install"
+            echo
+            echo '```bash'
+            echo "helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \\"
+            echo "  --namespace platform-observability --create-namespace \\"
+            echo "  --set image.repository=${REGISTRY_IMAGE} \\"
+            echo "  --set image.digest=${IMAGE_DIGEST}"
+            echo '```'
+            echo
+            echo "## Verify the signature"
+            echo
+            echo '```bash'
+            echo "cosign verify \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  --certificate-identity-regexp \"https://github.com/${REPO}/.github/workflows/release-image.yml@refs/tags/v.*\" \\"
+            echo "  ${IMAGE_REF}"
+            echo '```'
+            echo
+            echo "## Image details"
+            echo
+            echo "- **Image:** \`${REGISTRY_IMAGE}\`"
+            echo "- **Digest:** \`${IMAGE_DIGEST}\`"
+            echo "- **Tag:** \`${VERSION}\`"
+          } > body.md
+          echo "body_path=body.md" >> "${GITHUB_OUTPUT}"
+
+      - name: Download release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: image-release
+          path: ./release-assets
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: ${{ steps.notes.outputs.body_path }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/image-release.txt
