@@ -114,6 +114,29 @@ treat **anyone** as a valid reviewer (the team doesn't exist yet).
 
 ---
 
+## 6. Releases
+
+Releases are gated by a `release` label on a PR. The flow:
+
+1. On the PR you want to release, bump
+   `charts/k8s-scaling-advisor/Chart.yaml`'s `version:` field.
+2. Add the `release` label to the PR.
+3. Merge the PR.
+4. `auto-tag-on-release-label.yml` reads the bumped version, pushes
+   `v<version>` as a tag, and that tag push triggers `release-image.yml`
+   to build/sign/scan/publish the image, push the chart to GHCR OCI,
+   and create the GitHub Release with auto-generated notes.
+
+PRs without the `release` label merge silently — most merges are not
+releases (doc fixes, Dependabot bumps, internal refactors). This keeps
+the Releases page meaningful.
+
+If you forget to bump the version on a release-labelled PR, the tag
+workflow will warn and skip rather than fail. Bump on the next release
+PR.
+
+---
+
 ## Why these defaults
 
 - **No direct push to `main`**: forces every change through PR + review +
