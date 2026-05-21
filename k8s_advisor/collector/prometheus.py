@@ -508,9 +508,7 @@ def start_port_forward(
         return None
 
 
-def wait_for_prometheus(
-    port: int = 9091, max_attempts: int = 10, auth: tuple[str, str] | str | None = None
-) -> bool:
+def wait_for_prometheus(port: int = 9091, max_attempts: int = 10, auth: tuple[str, str] | str | None = None) -> bool:
     """Wait for Prometheus to be available on localhost.
 
     Args:
