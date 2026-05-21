@@ -21,4 +21,5 @@ def analyze_csv(csv_path: str, output_dir: str = "reports", output_prefix: str =
         Path to generated markdown report.
     """
     _ = output_prefix  # Kept for compatibility with previous function signature.
-    return analyze_csv_file(csv_path=csv_path, output_dir=output_dir, generate_graphs=False)
+    written = analyze_csv_file(csv_path=csv_path, output_dir=output_dir, generate_graphs=False)
+    return written["md"]

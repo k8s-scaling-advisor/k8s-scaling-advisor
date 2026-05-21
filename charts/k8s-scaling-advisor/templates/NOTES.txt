@@ -1,0 +1,17 @@
+K8s Scaling Advisor has been deployed.
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+Run history:
+  kubectl get cronjob -n {{ .Release.Namespace }} {{ include "k8s-scaling-advisor.fullname" . }}
+  kubectl get jobs -n {{ .Release.Namespace }} --sort-by=.metadata.creationTimestamp
+
+To trigger immediately:
+  kubectl create job --from=cronjob/{{ include "k8s-scaling-advisor.fullname" . }} {{ include "k8s-scaling-advisor.fullname" . }}-manual-$(date +%s) -n {{ .Release.Namespace }}
+
+To inspect logs (the markdown/JSON report is printed to stdout):
+  kubectl logs -n {{ .Release.Namespace }} job/<job-name>
+
+Reports are written to an ephemeral emptyDir; capture them from the Job pod
+before it terminates if you need them outside the log stream.

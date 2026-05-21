@@ -546,6 +546,7 @@ def cmd_analyze(args):
     print()
 
     csv_file = args.csv_file
+    formats = _parse_formats(args.format)
 
     # Create reports directory if it doesn't exist
     reports_dir = Path("reports")
@@ -555,9 +556,15 @@ def cmd_analyze(args):
     from k8s_advisor.simple_analyzer import analyze_csv_file
 
     try:
-        report_path = analyze_csv_file(csv_path=csv_file, output_dir=str(reports_dir), generate_graphs=args.graphs)
+        written = analyze_csv_file(
+            csv_path=csv_file,
+            output_dir=str(reports_dir),
+            generate_graphs=args.graphs,
+            formats=formats,
+        )
         print("\n✅ Analysis complete!")
-        print(f"📄 Report: {report_path}")
+        for fmt, path in written.items():
+            print(f"📄 {fmt.upper()}: {path}")
         if args.graphs:
             print(f"📊 Graphs: {reports_dir}/graphs/")
     except Exception as e:
@@ -566,6 +573,21 @@ def cmd_analyze(args):
 
         traceback.print_exc()
         sys.exit(1)
+
+
+def _parse_formats(raw: str) -> tuple:
+    """Parse --format value (e.g. 'md,json' -> ('md', 'json'))."""
+    parts = [p.strip().lower() for p in (raw or "md").split(",") if p.strip()]
+    if not parts:
+        return ("md",)
+    # Preserve order while deduplicating.
+    seen = set()
+    out = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return tuple(out)
 
 
 def cmd_report(args):
@@ -589,12 +611,13 @@ def cmd_report(args):
     class AnalyzeArgs:
         """Minimal stand-in for argparse.Namespace consumed by cmd_analyze."""
 
-        def __init__(self, csv_file, graphs):
-            """Capture the two fields cmd_analyze expects."""
+        def __init__(self, csv_file, graphs, fmt):
+            """Capture fields cmd_analyze expects."""
             self.csv_file = csv_file
             self.graphs = graphs
+            self.format = fmt
 
-    analyze_args = AnalyzeArgs(output_file, args.graphs)
+    analyze_args = AnalyzeArgs(output_file, args.graphs, args.format)
     cmd_analyze(analyze_args)
 
 
@@ -652,6 +675,11 @@ Examples:
     analyze_parser = subparsers.add_parser("analyze", help="Analyze collected data")
     analyze_parser.add_argument("csv_file", help="CSV file to analyze")
     analyze_parser.add_argument("-g", "--graphs", action="store_true", help="Generate graphs")
+    analyze_parser.add_argument(
+        "--format",
+        default="md",
+        help="Comma-separated output formats: md, json (default: md). Example: --format md,json",
+    )
 
     # Report command (full pipeline)
     report_parser = subparsers.add_parser("report", help="Full pipeline: collect + analyze")
@@ -665,6 +693,11 @@ Examples:
         "--all-namespaces", action="store_true", help="Collect all namespaces (default if no -n specified)"
     )
     report_parser.add_argument("-g", "--graphs", action="store_true", help="Generate graphs")
+    report_parser.add_argument(
+        "--format",
+        default="md",
+        help="Comma-separated output formats: md, json (default: md). Example: --format md,json",
+    )
     report_parser.add_argument("--prometheus-user", help="Username for Prometheus Basic Auth")
     report_parser.add_argument("--prometheus-password", help="Password for Prometheus Basic Auth")
     report_parser.add_argument("--prometheus-token", help="Bearer token for Prometheus Token Auth")

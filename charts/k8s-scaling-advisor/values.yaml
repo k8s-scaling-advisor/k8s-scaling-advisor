@@ -1,0 +1,94 @@
+image:
+  # GHCR path is set by the release workflow; override per-environment as needed.
+  repository: ghcr.io/k8s-scaling-advisor/k8s-scaling-advisor
+  # Empty by default — falls back to .Chart.AppVersion (see _helpers.tpl) so
+  # `helm install` pins to the chart-tested image version. Override for dev.
+  tag: ""
+  # Preferred for production: pin by immutable digest.
+  # Example: sha256:abcd1234...
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: true
+
+rbac:
+  create: true
+  # false = namespace-scoped Role/RoleBinding (only the release namespace)
+  # true  = cluster-wide ClusterRole/ClusterRoleBinding (all namespaces)
+  clusterWide: true
+
+cronjob:
+  enabled: true
+  schedule: "0 3 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: null
+  suspend: false
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 1
+  restartPolicy: Never
+
+command:
+  - k8s-advisor
+
+# Default to all-namespaces with cluster-wide RBAC. Narrow by overriding:
+#
+#   args:
+#     - report
+#     - -n
+#     - my-namespace
+#     - --format
+#     - md,json
+#
+# Strings are passed through `tpl` so values like "{{ .Release.Namespace }}"
+# render at install time.
+args:
+  - report
+  - --all-namespaces
+  - --format
+  - md,json
+
+extraEnv: []
+
+podAnnotations: {}
+podLabels: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Reports are written to an ephemeral emptyDir inside each Job pod.
+# Capture them via `kubectl logs` or by sidecar-shipping to your destination
+# of choice (S3, Slack, ticketing system, etc.) before the pod terminates.
+reports:
+  path: /app/reports

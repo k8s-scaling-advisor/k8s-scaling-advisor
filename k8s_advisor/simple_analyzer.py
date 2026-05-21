@@ -6,8 +6,9 @@ Works with namespace-scoped permissions (no cluster-admin required).
 """
 
 import csv
+import json
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -1329,8 +1330,71 @@ def generate_report(
         f.write(rendered)
 
 
-def analyze_csv_file(csv_path: str, output_dir: str = "reports", generate_graphs: bool = False) -> str:
-    """Main analysis function."""
+SUPPORTED_FORMATS = ("md", "json")
+
+
+def _serialize_analyses(
+    analyses: list,
+    has_prometheus: bool,
+    data_quality_warnings: list,
+) -> dict:
+    """Build the JSON-serializable dict. Enums become their string values
+    so the payload is consumable from non-Python tooling without lookup
+    tables."""
+    workloads = []
+    for a in analyses:
+        record = asdict(a)
+        record["priority"] = a.priority.value
+        record["scaling_approach"] = a.scaling_approach.value
+        workloads.append(record)
+
+    summary = {
+        "total": len(analyses),
+        "p0": sum(1 for a in analyses if a.priority == Priority.P0),
+        "p1": sum(1 for a in analyses if a.priority == Priority.P1),
+        "p2": sum(1 for a in analyses if a.priority == Priority.P2),
+        "p3": sum(1 for a in analyses if a.priority == Priority.P3),
+        "manual_action_required": sum(1 for a in analyses if a.requires_manual_action),
+    }
+
+    return {
+        "cluster": analyses[0].cluster if analyses else "unknown",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "prometheus_used": has_prometheus,
+        "data_quality_warnings": list(data_quality_warnings or []),
+        "summary": summary,
+        "workloads": workloads,
+    }
+
+
+def _write_json_report(
+    analyses: list,
+    output_path: Path,
+    has_prometheus: bool,
+    data_quality_warnings: list,
+) -> None:
+    """Write the JSON report next to the markdown one."""
+    payload = _serialize_analyses(analyses, has_prometheus, data_quality_warnings)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, default=str)
+
+
+def analyze_csv_file(
+    csv_path: str,
+    output_dir: str = "reports",
+    generate_graphs: bool = False,
+    formats: tuple = ("md",),
+) -> dict:
+    """Main analysis function.
+
+    Returns a dict mapping each requested format ("md", "json") to its
+    output path. Backwards-compatible: if a single-format tuple is passed,
+    callers can still grab paths by key.
+    """
+
+    unknown = [f for f in formats if f not in SUPPORTED_FORMATS]
+    if unknown:
+        raise ValueError(f"Unsupported format(s): {unknown}. Supported: {SUPPORTED_FORMATS}")
 
     print(f"🔍 Analyzing: {csv_path}")
 
@@ -1393,16 +1457,25 @@ def analyze_csv_file(csv_path: str, output_dir: str = "reports", generate_graphs
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     cluster = analyses[0].cluster if analyses else "unknown"
-    output_path = Path(output_dir) / f"k8s-advisor_{cluster}_{timestamp}.md"
+    base = Path(output_dir) / f"k8s-advisor_{cluster}_{timestamp}"
 
-    generate_report(
-        analyses,
-        str(output_path),
-        has_prometheus,
-        graphs_dir=graphs_subdir,
-        data_quality_warnings=data_quality_warnings,
-    )
-    print(f"✅ Report: {output_path}")
+    written: dict = {}
+    if "md" in formats:
+        md_path = base.with_suffix(".md")
+        generate_report(
+            analyses,
+            str(md_path),
+            has_prometheus,
+            graphs_dir=graphs_subdir,
+            data_quality_warnings=data_quality_warnings,
+        )
+        print(f"✅ Markdown report: {md_path}")
+        written["md"] = str(md_path)
+    if "json" in formats:
+        json_path = base.with_suffix(".json")
+        _write_json_report(analyses, json_path, has_prometheus, data_quality_warnings)
+        print(f"✅ JSON report: {json_path}")
+        written["json"] = str(json_path)
 
     # Print summary
     p0 = sum(1 for a in analyses if a.priority == Priority.P0)
@@ -1420,7 +1493,7 @@ def analyze_csv_file(csv_path: str, output_dir: str = "reports", generate_graphs
     if manual > 0:
         print(f"  🔧 Manual action required: {manual}")
 
-    return str(output_path)
+    return written
 
 
 if __name__ == "__main__":
