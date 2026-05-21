@@ -77,6 +77,15 @@ gh api -X PUT "repos/${REPO}/branches/main/protection" \
 JSON
 
 echo "==> Protection applied."
+
+# ─── Repo-wide settings (separate from branch protection) ───────────────
+# `delete_branch_on_merge` removes the source branch automatically when a
+# PR is merged. Keeps the branch list clean, especially for Dependabot.
+gh api -X PATCH "repos/${REPO}" \
+    -H "Accept: application/vnd.github+json" \
+    -f delete_branch_on_merge=true >/dev/null
+
+echo "==> delete_branch_on_merge enabled."
 echo
 echo "Verify at: https://github.com/${REPO}/settings/branches"
 echo
@@ -88,6 +97,7 @@ echo "  - Linear history enforced (no merge commits via UI)"
 echo "  - Signed commits required"
 echo "  - Force-push and branch deletion disabled"
 echo "  - Conversation resolution required before merge"
+echo "  - Source branches are auto-deleted on merge"
 echo
 echo "Solo-maintainer note: required_approving_review_count is 0 because"
 echo "GitHub does not allow self-approval. When a co-maintainer joins,"
