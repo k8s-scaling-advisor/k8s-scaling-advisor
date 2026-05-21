@@ -6,6 +6,6 @@
 # - `kubernetes` is required for `collect` and `report` commands.
 # - `analyze` can run offline from an existing CSV.
 
-kubernetes>=12.0.0
+kubernetes>=12.0.1
 jinja2>=3.0.0
 
