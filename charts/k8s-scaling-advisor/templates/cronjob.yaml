@@ -1,0 +1,214 @@
+{{- if .Values.cronjob.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "k8s-scaling-advisor.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "k8s-scaling-advisor.name" . }}
+    helm.sh/chart: {{ include "k8s-scaling-advisor.chart" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  schedule: {{ .Values.cronjob.schedule | quote }}
+  concurrencyPolicy: {{ .Values.cronjob.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.cronjob.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronjob.failedJobsHistoryLimit }}
+  {{- if .Values.cronjob.startingDeadlineSeconds }}
+  startingDeadlineSeconds: {{ .Values.cronjob.startingDeadlineSeconds }}
+  {{- end }}
+  suspend: {{ .Values.cronjob.suspend }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.cronjob.backoffLimit }}
+      {{- if .Values.cronjob.ttlSecondsAfterFinished }}
+      ttlSecondsAfterFinished: {{ .Values.cronjob.ttlSecondsAfterFinished }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: {{ include "k8s-scaling-advisor.name" . }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            {{- with .Values.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          serviceAccountName: {{ include "k8s-scaling-advisor.serviceAccountName" . }}
+          restartPolicy: {{ .Values.cronjob.restartPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.uploader.enabled }}
+          # Native sidecar (initContainer with restartPolicy: Always).
+          # Requires Kubernetes >= 1.29.
+          initContainers:
+            - name: uploader
+              image: "{{ include "k8s-scaling-advisor.uploaderImage" . }}"
+              imagePullPolicy: {{ .Values.uploader.image.pullPolicy }}
+              restartPolicy: Always
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  REPORTS={{ .Values.reports.path }}
+                  POLL={{ .Values.uploader.pollIntervalSeconds }}
+                  MAX={{ .Values.uploader.maxWaitSeconds }}
+                  echo "[uploader] waiting for $REPORTS/.done (poll=${POLL}s, max=${MAX}s)"
+                  WAITED=0
+                  while [ ! -f "$REPORTS/.done" ]; do
+                    if [ "$WAITED" -ge "$MAX" ]; then
+                      echo "[uploader] timed out waiting for .done sentinel" >&2
+                      exit 1
+                    fi
+                    sleep "$POLL"
+                    WAITED=$((WAITED + POLL))
+                  done
+                  echo "[uploader] sentinel found, shipping reports"
+                  {{- if eq .Values.uploader.kind "s3" }}
+                  : "${S3_BUCKET:?S3_BUCKET must be set}"
+                  EXTRA=""
+                  if [ -n "${S3_ENDPOINT_URL:-}" ]; then EXTRA="--endpoint-url $S3_ENDPOINT_URL"; fi
+                  if [ -n "${S3_REGION:-}" ]; then export AWS_DEFAULT_REGION="$S3_REGION"; fi
+                  cd "$REPORTS"
+                  for f in $(find . -type f ! -name '.done' | sed 's|^\./||'); do
+                    aws s3 cp "$f" "s3://$S3_BUCKET/${S3_PREFIX:-k8s-advisor}/$f" $EXTRA
+                  done
+                  {{- else if eq .Values.uploader.kind "slack" }}
+                  : "${SLACK_TOKEN:?SLACK_TOKEN must be set (mounted from a Secret)}"
+                  : "${SLACK_CHANNEL:?SLACK_CHANNEL must be set}"
+                  cd "$REPORTS"
+                  PATTERN='*.md'
+                  if [ "${SLACK_MARKDOWN_ONLY:-true}" != "true" ]; then PATTERN='*'; fi
+                  for f in $(find . -type f -name "$PATTERN" ! -name '.done' | sed 's|^\./||'); do
+                    echo "[uploader] uploading $f to Slack channel $SLACK_CHANNEL"
+                    # Slack returns HTTP 200 for many application-level errors
+                    # (invalid_auth, no_file_data, channel_not_found, ...).
+                    # We must parse the JSON body and check `"ok":true`.
+                    resp="$(curl -fsS -F file=@"$f" \
+                      -F "channels=$SLACK_CHANNEL" \
+                      -F "initial_comment=${SLACK_MESSAGE_PREFIX:-K8s Scaling Advisor report}: $f" \
+                      -H "Authorization: Bearer $SLACK_TOKEN" \
+                      https://slack.com/api/files.upload)"
+                    if ! printf '%s' "$resp" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+                      echo "[uploader] Slack upload failed for $f: $resp" >&2
+                      exit 1
+                    fi
+                    echo
+                  done
+                  {{- else if eq .Values.uploader.kind "http" }}
+                  : "${HTTP_URL:?HTTP_URL must be set}"
+                  cd "$REPORTS"
+                  for f in $(find . -type f ! -name '.done' | sed 's|^\./||'); do
+                    echo "[uploader] POSTing $f to $HTTP_URL"
+                    curl -fsS -F file=@"$f" \
+                      {{- range $k, $v := .Values.uploader.http.headers }}
+                      -H {{ printf "%s: %s" $k $v | quote }} \
+                      {{- end }}
+                      "$HTTP_URL"
+                    echo
+                  done
+                  {{- end }}
+                  echo "[uploader] done"
+              env:
+                {{- if eq .Values.uploader.kind "s3" }}
+                - name: S3_BUCKET
+                  value: {{ .Values.uploader.s3.bucket | quote }}
+                - name: S3_PREFIX
+                  value: {{ .Values.uploader.s3.prefix | quote }}
+                {{- if .Values.uploader.s3.region }}
+                - name: S3_REGION
+                  value: {{ .Values.uploader.s3.region | quote }}
+                {{- end }}
+                {{- if .Values.uploader.s3.endpointUrl }}
+                - name: S3_ENDPOINT_URL
+                  value: {{ .Values.uploader.s3.endpointUrl | quote }}
+                {{- end }}
+                {{- else if eq .Values.uploader.kind "slack" }}
+                - name: SLACK_CHANNEL
+                  value: {{ .Values.uploader.slack.channel | quote }}
+                - name: SLACK_MESSAGE_PREFIX
+                  value: {{ .Values.uploader.slack.messagePrefix | quote }}
+                - name: SLACK_MARKDOWN_ONLY
+                  value: {{ .Values.uploader.slack.markdownOnly | quote }}
+                - name: SLACK_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.uploader.slack.tokenSecret.name | quote }}
+                      key: {{ .Values.uploader.slack.tokenSecret.key | quote }}
+                {{- else if eq .Values.uploader.kind "http" }}
+                - name: HTTP_URL
+                  value: {{ .Values.uploader.http.url | quote }}
+                {{- end }}
+                {{- with .Values.uploader.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.uploader.resources | nindent 16 }}
+              volumeMounts:
+                - name: reports
+                  mountPath: {{ .Values.reports.path }}
+                {{- with .Values.uploader.extraVolumeMounts }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+          {{- end }}
+          containers:
+            - name: advisor
+              image: "{{ include "k8s-scaling-advisor.image" . }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              command:
+                {{- range .Values.command }}
+                - {{ tpl . $ | quote }}
+                {{- end }}
+              args:
+                {{- range .Values.args }}
+                - {{ tpl . $ | quote }}
+                {{- end }}
+              env:
+                # Keep app output path aligned with reports.path so the
+                # uploader sidecar finds the files.
+                - name: K8S_ADVISOR_REPORTS_DIR
+                  value: {{ .Values.reports.path | quote }}
+                {{- if .Values.clusterName }}
+                - name: K8S_ADVISOR_CLUSTER
+                  value: {{ .Values.clusterName | quote }}
+                {{- end }}
+                {{- with .Values.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              volumeMounts:
+                - name: reports
+                  mountPath: {{ .Values.reports.path }}
+          volumes:
+            - name: reports
+              emptyDir: {}
+            {{- if .Values.uploader.enabled }}
+            {{- with .Values.uploader.extraVolumes }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- end }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

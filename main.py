@@ -16,6 +16,7 @@ import argparse
 import csv
 import fnmatch
 import json
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -331,21 +332,40 @@ def cmd_collect(args):
         print(f"  Namespace: {prom_result['namespace']}")
         print(f"  Port: {prom_result['port']}")
 
-        # Start port-forward
-        print("  Starting port-forward...")
-        pf_process = prom.start_port_forward(
-            prom_result["service_name"], prom_result["namespace"], local_port=9091, remote_port=prom_result["port"]
-        )
-
-        if pf_process:
-            print("  Waiting for Prometheus...")
-            if prom.wait_for_prometheus(9091, auth=prom_auth):
-                print("✓ Prometheus ready on localhost:9091")
+        in_cluster = bool(os.environ.get("KUBERNETES_SERVICE_HOST"))
+        if in_cluster:
+            # Inside a Pod we can hit cluster DNS directly — port-forward
+            # would just be an extra hop.
+            svc_url = (
+                f"http://{prom_result['service_name']}.{prom_result['namespace']}"
+                f".svc.cluster.local:{prom_result['port']}"
+            )
+            prom.set_prometheus_url(svc_url)
+            print(f"  Using cluster DNS: {svc_url}")
+            # No port arg — wait_for_prometheus reads the base set above.
+            if prom.wait_for_prometheus(auth=prom_auth):
+                print("✓ Prometheus reachable via cluster DNS")
                 use_prometheus = True
             else:
-                print("⚠️  Prometheus port-forward failed or auth failed, continuing without it")
-                prom.cleanup_port_forward(pf_process)
-                pf_process = None
+                print("⚠️  Prometheus unreachable via cluster DNS, continuing without it")
+        else:
+            print("  Starting port-forward...")
+            pf_process = prom.start_port_forward(
+                prom_result["service_name"],
+                prom_result["namespace"],
+                local_port=9091,
+                remote_port=prom_result["port"],
+            )
+
+            if pf_process:
+                print("  Waiting for Prometheus...")
+                if prom.wait_for_prometheus(9091, auth=prom_auth):
+                    print("✓ Prometheus ready on localhost:9091")
+                    use_prometheus = True
+                else:
+                    print("⚠️  Prometheus port-forward failed or auth failed, continuing without it")
+                    prom.cleanup_port_forward(pf_process)
+                    pf_process = None
     else:
         print("⚠️  Prometheus not detected, continuing with metrics-server only")
 
@@ -475,9 +495,10 @@ def cmd_collect(args):
             print("✗ No data collected", file=sys.stderr)
         sys.exit(1)
 
-    # Create reports directory
-    reports_dir = Path("reports")
-    reports_dir.mkdir(exist_ok=True)
+    # Create reports directory. Honour K8S_ADVISOR_REPORTS_DIR so the chart
+    # can keep `reports.path` and the actual output location in sync.
+    reports_dir = _reports_dir()
+    reports_dir.mkdir(parents=True, exist_ok=True)
 
     # Write CSV with cluster name in filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -546,26 +567,63 @@ def cmd_analyze(args):
     print()
 
     csv_file = args.csv_file
+    formats = _parse_formats(args.format)
 
-    # Create reports directory if it doesn't exist
-    reports_dir = Path("reports")
-    reports_dir.mkdir(exist_ok=True)
+    # Create reports directory. Honour K8S_ADVISOR_REPORTS_DIR so the chart
+    # can keep `reports.path` and the actual output location in sync.
+    reports_dir = _reports_dir()
+    reports_dir.mkdir(parents=True, exist_ok=True)
 
     # Use the integrated analyzer
     from k8s_advisor.simple_analyzer import analyze_csv_file
 
     try:
-        report_path = analyze_csv_file(csv_path=csv_file, output_dir=str(reports_dir), generate_graphs=args.graphs)
+        written = analyze_csv_file(
+            csv_path=csv_file,
+            output_dir=str(reports_dir),
+            generate_graphs=args.graphs,
+            formats=formats,
+        )
         print("\n✅ Analysis complete!")
-        print(f"📄 Report: {report_path}")
+        for fmt, path in written.items():
+            print(f"📄 {fmt.upper()}: {path}")
         if args.graphs:
             print(f"📊 Graphs: {reports_dir}/graphs/")
+        # Sentinel for the optional sidecar uploader: signals "all writes
+        # are flushed, safe to upload". The chart's uploader watches for
+        # this file and exits once it's seen and the upload is done.
+        (reports_dir / ".done").write_text("ok\n", encoding="utf-8")
     except Exception as e:
         print(f"\n✗ Analysis failed: {e}", file=sys.stderr)
         import traceback
 
         traceback.print_exc()
         sys.exit(1)
+
+
+def _reports_dir() -> Path:
+    """Resolve the reports output directory.
+
+    Reads ``K8S_ADVISOR_REPORTS_DIR`` so the Helm chart can pin the path
+    (`reports.path`) on the CronJob and have the application write there.
+    Defaults to ``./reports`` for laptop runs.
+    """
+    return Path(os.environ.get("K8S_ADVISOR_REPORTS_DIR") or "reports")
+
+
+def _parse_formats(raw: str) -> tuple:
+    """Parse --format value (e.g. 'md,json' -> ('md', 'json'))."""
+    parts = [p.strip().lower() for p in (raw or "md").split(",") if p.strip()]
+    if not parts:
+        return ("md",)
+    # Preserve order while deduplicating.
+    seen = set()
+    out = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return tuple(out)
 
 
 def cmd_report(args):
@@ -589,12 +647,13 @@ def cmd_report(args):
     class AnalyzeArgs:
         """Minimal stand-in for argparse.Namespace consumed by cmd_analyze."""
 
-        def __init__(self, csv_file, graphs):
-            """Capture the two fields cmd_analyze expects."""
+        def __init__(self, csv_file, graphs, fmt):
+            """Capture fields cmd_analyze expects."""
             self.csv_file = csv_file
             self.graphs = graphs
+            self.format = fmt
 
-    analyze_args = AnalyzeArgs(output_file, args.graphs)
+    analyze_args = AnalyzeArgs(output_file, args.graphs, args.format)
     cmd_analyze(analyze_args)
 
 
@@ -652,6 +711,11 @@ Examples:
     analyze_parser = subparsers.add_parser("analyze", help="Analyze collected data")
     analyze_parser.add_argument("csv_file", help="CSV file to analyze")
     analyze_parser.add_argument("-g", "--graphs", action="store_true", help="Generate graphs")
+    analyze_parser.add_argument(
+        "--format",
+        default="md",
+        help="Comma-separated output formats: md, json (default: md). Example: --format md,json",
+    )
 
     # Report command (full pipeline)
     report_parser = subparsers.add_parser("report", help="Full pipeline: collect + analyze")
@@ -665,6 +729,11 @@ Examples:
         "--all-namespaces", action="store_true", help="Collect all namespaces (default if no -n specified)"
     )
     report_parser.add_argument("-g", "--graphs", action="store_true", help="Generate graphs")
+    report_parser.add_argument(
+        "--format",
+        default="md",
+        help="Comma-separated output formats: md, json (default: md). Example: --format md,json",
+    )
     report_parser.add_argument("--prometheus-user", help="Username for Prometheus Basic Auth")
     report_parser.add_argument("--prometheus-password", help="Password for Prometheus Basic Auth")
     report_parser.add_argument("--prometheus-token", help="Bearer token for Prometheus Token Auth")

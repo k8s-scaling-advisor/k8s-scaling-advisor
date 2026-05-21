@@ -4,20 +4,54 @@ This module provides comprehensive Prometheus auto-detection and query capabilit
 All functions are designed to fail gracefully - returning None or empty dict on failure
 rather than raising exceptions.
 
+All Kubernetes API access goes through the official ``kubernetes`` Python
+client (no kubectl shell-outs). Port-forwarding (when needed for the
+laptop flow) uses ``kubernetes.stream.portforward.PortForward`` and a small
+local TCP listener; nothing in this module spawns external processes.
+
 Detection Strategy (in priority order):
-1. CRDs (most reliable) - kubectl get crds | grep prometheus
-2. All services grep (simple and effective) - kubectl get svc -A | grep prometheus
-3. Service labels - kubectl get svc -A -l app.kubernetes.io/name=prometheus
-4. Prometheus operator - kubectl get deployments -A | grep prometheus-operator
-5. Common namespaces - monitoring, prometheus, kube-system, observability
-6. Manual fallback - prompt user for URL
+1. CRDs (most reliable) — list custom resource definitions, filter by name
+2. All services grep — list services across all namespaces, filter by name
+3. Service labels — label-selector queries (e.g. app.kubernetes.io/name=prometheus)
+4. Prometheus operator — list deployments, look for ``prometheus-operator``
+5. Common namespaces — monitoring, prometheus, kube-system, observability
+6. Manual fallback — prompt user for URL
 """
 
-import json
 import random
-import subprocess
+import select
+import socket
+import threading
 import time
 from typing import Any
+
+import requests
+from kubernetes import client
+from kubernetes.client.rest import ApiException
+from kubernetes.stream import portforward
+
+# Base URL for Prometheus queries. Mutated by ``set_prometheus_url`` once
+# discovery picks an endpoint (in-cluster service DNS, port-forwarded
+# localhost, or operator-supplied URL).
+_PROM_BASE = "http://localhost:9091"
+
+
+def set_prometheus_url(base: str) -> None:
+    """Override the Prometheus base URL used by all query functions.
+
+    ``base`` should NOT have a trailing slash and should NOT include
+    ``/api/v1/query``. Examples:
+        http://localhost:9091
+        http://prometheus-server.monitoring.svc.cluster.local:9090
+        https://prom.example.com
+    """
+    global _PROM_BASE
+    _PROM_BASE = base.rstrip("/")
+
+
+def get_prometheus_url() -> str:
+    """Read the current Prometheus base URL (test/diagnostic helper)."""
+    return _PROM_BASE
 
 
 def _request_with_retry(
@@ -199,6 +233,19 @@ def auto_detect_prometheus() -> dict[str, Any]:
     }
 
 
+def _service_port(svc) -> int:
+    """Pick the most likely Prometheus HTTP port from a Service object.
+
+    Prefers a port named ``web``/``http``/``prometheus``; falls back to the
+    first declared port; defaults to 9090 (vanilla Prometheus default).
+    """
+    ports = (svc.spec.ports or []) if svc.spec else []
+    for p in ports:
+        if p.name in ("web", "http", "prometheus"):
+            return p.port or 9090
+    return ports[0].port if ports and ports[0].port else 9090
+
+
 def detect_prometheus_crds() -> list[str]:
     """Check for Prometheus CRDs in the cluster.
 
@@ -217,28 +264,11 @@ def detect_prometheus_crds() -> list[str]:
         ...     print("Prometheus operator is installed")
     """
     try:
-        result = subprocess.run(
-            ["kubectl", "get", "crds", "-o", "json"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        if result.returncode != 0:
-            return []
-
-        data = json.loads(result.stdout)
-        crds = []
-
-        for crd in data.get("items", []):
-            name = crd.get("metadata", {}).get("name", "")
-            if "prometheus" in name.lower():
-                crds.append(name)
-
-        return crds
-
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, KeyError):
+        api = client.ApiextensionsV1Api()
+        crds = api.list_custom_resource_definition(timeout_seconds=10)
+    except (ApiException, Exception):
         return []
+    return [c.metadata.name for c in (crds.items or []) if "prometheus" in (c.metadata.name or "").lower()]
 
 
 def find_all_services_with_prometheus() -> list[dict[str, Any]]:
@@ -259,52 +289,24 @@ def find_all_services_with_prometheus() -> list[dict[str, Any]]:
         ...     print(f"{svc['namespace']}/{svc['name']}:{svc['port']}")
     """
     try:
-        # Get all services in JSON format
-        result = subprocess.run(
-            ["kubectl", "get", "services", "-A", "-o", "json"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-
-        if result.returncode != 0:
-            return []
-
-        data = json.loads(result.stdout)
-        services = []
-
-        for svc in data.get("items", []):
-            name = svc.get("metadata", {}).get("name", "")
-            namespace = svc.get("metadata", {}).get("namespace", "")
-
-            # Check if "prometheus" is in the service name
-            if "prometheus" in name.lower():
-                # Extract port information
-                ports = svc.get("spec", {}).get("ports", [])
-                port = 9090  # Default
-
-                if ports:
-                    # Look for common Prometheus ports or the first port
-                    for p in ports:
-                        if p.get("name") in ["web", "http", "prometheus"]:
-                            port = p.get("port", 9090)
-                            break
-                    else:
-                        port = ports[0].get("port", 9090)
-
-                services.append(
-                    {
-                        "name": name,
-                        "namespace": namespace,
-                        "port": port,
-                        "type": svc.get("spec", {}).get("type", "ClusterIP"),
-                    }
-                )
-
-        return services
-
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError):
+        v1 = client.CoreV1Api()
+        svc_list = v1.list_service_for_all_namespaces(timeout_seconds=15)
+    except (ApiException, Exception):
         return []
+    out: list[dict[str, Any]] = []
+    for svc in svc_list.items or []:
+        name = svc.metadata.name or ""
+        if "prometheus" not in name.lower():
+            continue
+        out.append(
+            {
+                "name": name,
+                "namespace": svc.metadata.namespace or "",
+                "port": _service_port(svc),
+                "type": (svc.spec.type if svc.spec else None) or "ClusterIP",
+            }
+        )
+    return out
 
 
 def find_prometheus_service_from_crds() -> dict[str, Any] | None:
@@ -317,29 +319,25 @@ def find_prometheus_service_from_crds() -> dict[str, Any] | None:
         Dict with service info (name, namespace, port) or None if not found
     """
     try:
-        # Try to get Prometheus custom resources
-        result = subprocess.run(
-            ["kubectl", "get", "prometheus", "-A", "-o", "json"],
-            capture_output=True,
-            text=True,
-            timeout=10,
+        custom = client.CustomObjectsApi()
+        # The Prometheus operator's `Prometheus` CRD lives under
+        # monitoring.coreos.com/v1, listed at /apis/monitoring.coreos.com/v1/prometheuses
+        result = custom.list_cluster_custom_object(
+            group="monitoring.coreos.com",
+            version="v1",
+            plural="prometheuses",
+            timeout_seconds=10,
         )
-
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            items = data.get("items", [])
-
-            if items:
-                # Use the first Prometheus resource
-                prom = items[0]
-                namespace = prom.get("metadata", {}).get("namespace", "monitoring")
-
-                # Look for service in the same namespace
-                return find_prometheus_service_in_namespace(namespace)
-
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError):
+        items = result.get("items", []) if isinstance(result, dict) else []
+        if items:
+            namespace = items[0].get("metadata", {}).get("namespace", "monitoring")
+            svc = find_prometheus_service_in_namespace(namespace)
+            if svc:
+                return svc
+    except (ApiException, Exception):
+        # CRD lookup is best-effort; on any failure we drop through to
+        # the service-name search below so detection has a fallback path.
         pass
-
     # Fallback: search all services
     services = find_all_services_with_prometheus()
     return services[0] if services else None
@@ -354,35 +352,19 @@ def find_service_by_labels(labels: list[str]) -> dict[str, Any] | None:
     Returns:
         Dict with service info or None if not found
     """
+    v1 = client.CoreV1Api()
     for label in labels:
         try:
-            result = subprocess.run(
-                ["kubectl", "get", "services", "-A", "-l", label, "-o", "json"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-
-            if result.returncode != 0:
-                continue
-
-            data = json.loads(result.stdout)
-            items = data.get("items", [])
-
-            if items:
-                svc = items[0]
-                ports = svc.get("spec", {}).get("ports", [])
-                port = ports[0].get("port", 9090) if ports else 9090
-
-                return {
-                    "name": svc.get("metadata", {}).get("name", ""),
-                    "namespace": svc.get("metadata", {}).get("namespace", ""),
-                    "port": port,
-                }
-
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError):
+            result = v1.list_service_for_all_namespaces(label_selector=label, timeout_seconds=10)
+        except (ApiException, Exception):
             continue
-
+        if result.items:
+            svc = result.items[0]
+            return {
+                "name": svc.metadata.name or "",
+                "namespace": svc.metadata.namespace or "",
+                "port": _service_port(svc),
+            }
     return None
 
 
@@ -393,29 +375,14 @@ def detect_prometheus_operator() -> dict[str, Any] | None:
         Dict with operator info (name, namespace) or None if not found
     """
     try:
-        result = subprocess.run(
-            ["kubectl", "get", "deployments", "-A", "-o", "json"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-
-        if result.returncode != 0:
-            return None
-
-        data = json.loads(result.stdout)
-
-        for deploy in data.get("items", []):
-            name = deploy.get("metadata", {}).get("name", "")
-            if "prometheus-operator" in name.lower():
-                return {
-                    "name": name,
-                    "namespace": deploy.get("metadata", {}).get("namespace", ""),
-                }
-
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError):
-        pass
-
+        apps = client.AppsV1Api()
+        deploys = apps.list_deployment_for_all_namespaces(timeout_seconds=15)
+    except (ApiException, Exception):
+        return None
+    for deploy in deploys.items or []:
+        name = deploy.metadata.name or ""
+        if "prometheus-operator" in name.lower():
+            return {"name": name, "namespace": deploy.metadata.namespace or ""}
     return None
 
 
@@ -429,57 +396,96 @@ def find_prometheus_service_in_namespace(namespace: str) -> dict[str, Any] | Non
         Dict with service info or None if not found
     """
     try:
-        result = subprocess.run(
-            ["kubectl", "get", "services", "-n", namespace, "-o", "json"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        if result.returncode != 0:
-            return None
-
-        data = json.loads(result.stdout)
-
-        for svc in data.get("items", []):
-            name = svc.get("metadata", {}).get("name", "")
-            if "prometheus" in name.lower() and "operator" not in name.lower():
-                ports = svc.get("spec", {}).get("ports", [])
-                port = 9090
-
-                if ports:
-                    for p in ports:
-                        if p.get("name") in ["web", "http", "prometheus"]:
-                            port = p.get("port", 9090)
-                            break
-                    else:
-                        port = ports[0].get("port", 9090)
-
-                return {
-                    "name": name,
-                    "namespace": namespace,
-                    "port": port,
-                }
-
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError):
-        pass
-
+        v1 = client.CoreV1Api()
+        svc_list = v1.list_namespaced_service(namespace, timeout_seconds=10)
+    except (ApiException, Exception):
+        return None
+    for svc in svc_list.items or []:
+        name = svc.metadata.name or ""
+        lower = name.lower()
+        if "prometheus" in lower and "operator" not in lower:
+            return {"name": name, "namespace": namespace, "port": _service_port(svc)}
     return None
+
+
+class _LocalPortForward:
+    """Manages a TCP listener that proxies to a Pod via the K8s API.
+
+    Encapsulates the bookkeeping for ``kubernetes.stream.portforward.PortForward``,
+    which exposes a socket-pair interface rather than binding a local port. We
+    wrap it in a tiny accept-loop so callers can talk to ``localhost:<local_port>``
+    the same way they used to with ``kubectl port-forward``.
+
+    Use ``stop()`` to tear down the listener and worker threads cleanly.
+    """
+
+    def __init__(self, listener: socket.socket, stop_event: threading.Event) -> None:
+        """Hold the bound socket and the kill switch for the accept loop."""
+        self._listener = listener
+        self._stop_event = stop_event
+
+    def stop(self) -> None:
+        """Stop accepting new connections and close the listener."""
+        self._stop_event.set()
+        try:
+            self._listener.close()
+        except Exception:
+            # The listener may already be closed (double-stop), or in a
+            # broken state from a kernel-level error. Either way there's
+            # nothing the caller can do — `stop()` is best-effort cleanup.
+            pass
+
+
+def _resolve_pod_for_service(namespace: str, service_name: str) -> tuple[str, int] | None:
+    """Find a ready Pod backing ``service_name`` and the targetPort to use.
+
+    Returns ``(pod_name, target_port)`` or None if the Service has no matching
+    Pods. Used instead of port-forwarding to a Service directly because the
+    Python ``portforward`` helper only forwards to Pods.
+    """
+    v1 = client.CoreV1Api()
+    try:
+        svc = v1.read_namespaced_service(service_name, namespace)
+    except (ApiException, Exception):
+        return None
+    selector = (svc.spec.selector if svc.spec else None) or {}
+    if not selector:
+        return None
+    label_selector = ",".join(f"{k}={v}" for k, v in selector.items())
+    try:
+        pods = v1.list_namespaced_pod(namespace, label_selector=label_selector)
+    except (ApiException, Exception):
+        return None
+    # Pick a Pod that's running and ready. Fall back to any pod if none ready.
+    candidates = []
+    for p in pods.items or []:
+        if p.status and p.status.phase == "Running":
+            ready = any(c.ready for c in (p.status.container_statuses or []) if c)
+            candidates.append((ready, p.metadata.name))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (not t[0], t[1] or ""))  # ready first
+    pod_name = candidates[0][1] or ""
+
+    # Resolve targetPort: prefer the named "web"/"http"/"prometheus" port.
+    target_port = _service_port(svc)
+    return (pod_name, target_port)
 
 
 def start_port_forward(
     service_name: str, namespace: str, local_port: int = 9091, remote_port: int = 9090
-) -> subprocess.Popen | None:
-    """Start kubectl port-forward for Prometheus service.
+) -> _LocalPortForward | None:
+    """Forward a local TCP port to a Prometheus pod via the Kubernetes API.
 
     Args:
         service_name: Service name to forward
         namespace: Namespace where service lives
         local_port: Local port to bind (default: 9091)
-        remote_port: Remote service port (default: 9090)
+        remote_port: Ignored. Kept for backward compatibility — the actual
+                     remote port is read from the Service spec.
 
     Returns:
-        Popen process or None if failed to start
+        Forwarder handle or None if failed to start
 
     Example:
         >>> pf = start_port_forward('prometheus', 'monitoring')
@@ -488,67 +494,134 @@ def start_port_forward(
         ...     # Do work
         ...     cleanup_port_forward(pf)
     """
+    _ = remote_port  # backwards-compat: ignored, port comes from the Service.
+    resolved = _resolve_pod_for_service(namespace, service_name)
+    if resolved is None:
+        return None
+    pod_name, target_port = resolved
+
     try:
-        process = subprocess.Popen(
-            [
-                "kubectl",
-                "port-forward",
-                f"service/{service_name}",
-                f"{local_port}:{remote_port}",
-                "-n",
-                namespace,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        return process
-
-    except subprocess.SubprocessError:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", local_port))
+        listener.listen(4)
+        listener.settimeout(0.5)
+    except OSError:
         return None
 
+    stop_event = threading.Event()
 
-def wait_for_prometheus(port: int = 9091, max_attempts: int = 10, auth: tuple[str, str] | str | None = None) -> bool:
-    """Wait for Prometheus to be available on localhost.
+    def _accept_loop() -> None:
+        """Accept local connections and pipe each to the Pod via the K8s API."""
+        v1 = client.CoreV1Api()
+        while not stop_event.is_set():
+            try:
+                conn, _addr = listener.accept()
+            except (TimeoutError, OSError):
+                continue
+
+            def _proxy(conn: socket.socket = conn) -> None:
+                """Bridge the local TCP connection to a Pod port-forward stream."""
+                try:
+                    pf = portforward(
+                        v1.connect_get_namespaced_pod_portforward,
+                        pod_name,
+                        namespace,
+                        ports=str(target_port),
+                    )
+                    upstream = pf.socket(target_port)
+                    upstream.setblocking(False)
+                    conn.setblocking(False)
+                    sockets = [conn, upstream]
+                    try:
+                        while not stop_event.is_set():
+                            readable, _, _ = select.select(sockets, [], [], 0.5)
+                            if not readable:
+                                continue
+                            for sock in readable:
+                                data = sock.recv(4096)
+                                if not data:
+                                    return
+                                other = upstream if sock is conn else conn
+                                other.sendall(data)
+                    finally:
+                        try:
+                            pf.close()
+                        except Exception:
+                            # PortForward.close() can fail if the upstream
+                            # stream is already torn down; we're already in a
+                            # cleanup path, so swallow and continue.
+                            pass
+                except Exception:
+                    # Any failure setting up the port-forward (auth,
+                    # network, pod went away) just kills this proxy
+                    # thread; the next client connect will retry from
+                    # scratch via the accept loop.
+                    return
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        # Local socket may already be closed by the peer
+                        # (Prometheus client disconnect) — nothing to do.
+                        pass
+
+            threading.Thread(target=_proxy, daemon=True).start()
+
+    threading.Thread(target=_accept_loop, daemon=True).start()
+    return _LocalPortForward(listener, stop_event)
+
+
+def _http_probe(url: str, timeout: float, auth: tuple[str, str] | str | None) -> bool:
+    """Issue a single GET against ``url`` and return True iff it 2xxs.
+
+    Uses ``requests`` so we don't ship curl in the container and don't expose
+    the broader scheme set that ``urllib`` accepts (file://, ftp://, ...).
+    Auth handling matches the rest of this module (Basic for a tuple, Bearer
+    for a str).
+    """
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return False
+    headers: dict = {}
+    basic_auth = None
+    if isinstance(auth, tuple):
+        basic_auth = auth
+    elif isinstance(auth, str) and auth:
+        headers["Authorization"] = f"Bearer {auth}"
+    try:
+        resp = requests.get(url, timeout=timeout, headers=headers, auth=basic_auth)
+        return 200 <= resp.status_code < 300
+    except requests.RequestException:
+        return False
+
+
+def wait_for_prometheus(
+    port: int | None = None,
+    max_attempts: int = 10,
+    auth: tuple[str, str] | str | None = None,
+) -> bool:
+    """Wait until Prometheus answers a probe query.
+
+    The probed URL is taken from the module-level base set by
+    ``set_prometheus_url()``. ``port`` is a legacy escape hatch — when given,
+    we override the base with ``http://localhost:<port>``. The probe targets
+    ``/api/v1/query?query=up``.
 
     Args:
-        port: Local port where Prometheus is forwarded
-        max_attempts: Maximum connection attempts (default: 10)
-        auth: Optional authentication credentials.
-              Tuple[str, str] for Basic Auth (username, password)
-              str for Bearer Token
+        port: Optional. When set, probe ``http://localhost:<port>`` instead of
+              the configured base. Used for the laptop port-forward flow.
+        max_attempts: Maximum connection attempts (default: 10).
+        auth: Optional credentials. Tuple = Basic Auth, str = Bearer Token.
 
     Returns:
-        True if Prometheus responds, False otherwise
+        True if Prometheus responds, False after exhausting attempts.
     """
-    url = f"http://localhost:{port}/api/v1/query?query=up"
-
-    def build_curl_cmd(url: str, auth: tuple[str, str] | str | None) -> list[str]:
-        """Build a curl argv list, optionally adding Basic-Auth or Bearer-Token flags."""
-        cmd = ["curl", "-s", "-f", url]
-        if auth:
-            if isinstance(auth, tuple):  # Basic Auth
-                cmd.extend(["-u", f"{auth[0]}:{auth[1]}"])
-            elif isinstance(auth, str):  # Bearer Token
-                cmd.extend(["-H", f"Authorization: Bearer {auth}"])
-        return cmd
-
+    base = f"http://localhost:{port}" if port is not None else _PROM_BASE
+    url = f"{base}/api/v1/query?query=up"
     for _ in range(max_attempts):
-        try:
-            result = subprocess.run(
-                build_curl_cmd(url, auth),
-                capture_output=True,
-                timeout=2,
-            )
-
-            if result.returncode == 0:
-                return True
-
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            pass
-
+        if _http_probe(url, timeout=2, auth=auth):
+            return True
         time.sleep(1)
-
     return False
 
 
@@ -562,32 +635,17 @@ def test_connection(url: str) -> bool:
         True if connection successful, False otherwise
     """
     test_url = f"{url.rstrip('/')}/api/v1/query?query=up"
-
-    try:
-        result = subprocess.run(
-            ["curl", "-s", "-f", test_url],
-            capture_output=True,
-            timeout=5,
-        )
-
-        return result.returncode == 0
-
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-        return False
+    return _http_probe(test_url, timeout=5, auth=None)
 
 
-def cleanup_port_forward(process: subprocess.Popen) -> None:
-    """Clean up port-forward process.
+def cleanup_port_forward(forwarder: _LocalPortForward | None) -> None:
+    """Stop a forwarder created by ``start_port_forward``.
 
     Args:
-        process: Popen process from start_port_forward()
+        forwarder: Handle returned by ``start_port_forward()``, or None.
     """
-    if process:
-        try:
-            process.terminate()
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
+    if forwarder is not None:
+        forwarder.stop()
 
 
 def query_cpu_percentiles(
@@ -613,7 +671,7 @@ def query_cpu_percentiles(
         Returns empty dict on failure
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
@@ -739,7 +797,7 @@ def query_memory_volatility(
         Returns empty dict on failure
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
@@ -909,7 +967,7 @@ def query_cpu_throttle_pct(
         Throttle percentage (0-100), or 0.0 on failure / no data
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
@@ -995,7 +1053,7 @@ def query_days_since_last_restart(
         Days since last restart, or -1.0 if unavailable
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 
@@ -1059,7 +1117,7 @@ def query_restart_rate(
         Restart rate per day (float), or 0.0 on failure
     """
     try:
-        url = f"http://localhost:{port}/api/v1/query"
+        url = f"{_PROM_BASE}/api/v1/query"
         headers = {}
         basic_auth = None
 

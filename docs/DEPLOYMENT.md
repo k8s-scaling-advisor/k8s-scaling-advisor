@@ -1,0 +1,275 @@
+# Deployment Guide (Container + Helm)
+
+This guide covers running K8s Scaling Advisor as a self-contained container in Kubernetes.
+
+## Secure image pipeline (recommended)
+
+Use the release workflow to build, scan, sign, and publish:
+
+- Workflow: `.github/workflows/release-image.yml`
+- Trigger: push a Git tag like `v3.0.1` (or run `workflow_dispatch`)
+- Registry: `ghcr.io/<owner>/<repo>`
+- Output: immutable image digest + Helm install snippet in workflow artifact (`image-release.txt`)
+
+Security controls in the workflow:
+- SBOM + SLSA provenance attestation via BuildKit (`sbom: true`, `provenance: mode=max`)
+- Grype vulnerability scan (fails on HIGH/CRITICAL findings)
+- Keyless Cosign signing with GitHub OIDC identity
+- Signature verification step in CI
+
+## 1) Build and push the image (manual fallback)
+
+From repository root:
+
+```bash
+docker build -f Containerfile -t ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0 .
+docker push ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0
+```
+
+The image includes:
+- Python runtime
+- project package + `k8s-advisor` CLI
+
+The image does NOT bundle `kubectl` or `curl`. Discovery and (when needed)
+port-forwarding go through the `kubernetes` Python client, so the runtime
+talks directly to the API server.
+
+## 2) Deploy with Helm
+
+Two equally-valid sources for the chart. Pick whichever fits your flow:
+
+| Source | Use when |
+|---|---|
+| `oci://ghcr.io/<owner>/charts/k8s-scaling-advisor` (pinned) | Production / CI / Argo / Flux / shipping a release tag without cloning the repo |
+| `./charts/k8s-scaling-advisor` (local source) | You've cloned the repo for development, you're hacking on values, or you want to pin to `main` |
+
+Each release publishes the chart as an OCI artifact alongside the image; the
+exact `--version` is printed on the GitHub Release page. The local source
+always reflects the current branch.
+
+The examples below show both invocations. Anywhere you see `./charts/...`
+works, the equivalent `oci://...` works too, and vice versa.
+
+### Namespace-scoped deployment (default)
+
+From the OCI artifact (pinned release):
+
+```bash
+helm upgrade --install k8s-scaling-advisor \
+  oci://ghcr.io/<owner>/charts/k8s-scaling-advisor \
+  --version <chart-version> \
+  --namespace platform-observability \
+  --create-namespace \
+  --set image.digest=sha256:<published-digest>
+```
+
+From a local checkout (development / unreleased changes on `main`):
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  --namespace platform-observability \
+  --create-namespace \
+  --set image.digest=sha256:<published-digest>
+```
+
+This creates:
+- `ServiceAccount`
+- namespace-scoped `Role` + `RoleBinding`
+- `CronJob` running `report -n <release-namespace> --format md,json` daily
+
+The release namespace is the only namespace the advisor can read. This
+matches the project guideline that the advisor must work with
+namespace-scoped permissions (no cluster-admin required).
+
+### Cluster-wide deployment
+
+When you want fleet visibility, flip both `rbac.clusterWide=true` AND
+the args to `--all-namespaces`. Either chart source works — pick one:
+
+```bash
+# OCI (pinned release)
+helm upgrade --install k8s-scaling-advisor \
+  oci://ghcr.io/<owner>/charts/k8s-scaling-advisor \
+  --version <chart-version> \
+  --namespace platform-observability \
+  --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set rbac.clusterWide=true \
+  --set-string 'args[0]=report' \
+  --set-string 'args[1]=--all-namespaces' \
+  --set-string 'args[2]=--format' \
+  --set-string 'args[3]=md,json'
+```
+
+```bash
+# Local checkout
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  --namespace platform-observability \
+  --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set rbac.clusterWide=true \
+  --set-string 'args[0]=report' \
+  --set-string 'args[1]=--all-namespaces' \
+  --set-string 'args[2]=--format' \
+  --set-string 'args[3]=md,json'
+```
+
+This swaps the namespace-scoped `Role` for a `ClusterRole`/`ClusterRoleBinding`.
+
+## 3) Prefer immutable digests over tags
+
+The chart supports both tag and digest:
+
+- `image.tag`: mutable, useful for dev
+- `image.digest`: immutable, recommended for prod
+
+If both are provided, digest is used.
+
+## 4) Configure schedule
+
+Example:
+
+```bash
+# Every 6 hours
+--set cronjob.schedule="0 */6 * * *"
+```
+
+## 5) Where the reports live
+
+Each Job pod writes reports to **`/app/reports`** inside its `emptyDir`
+volume. The advisor produces:
+
+- `k8s-advisor_<cluster>_<timestamp>.csv` — raw 40-column collection
+- `k8s-advisor_<cluster>_<timestamp>.md` — markdown summary
+- `k8s-advisor_<cluster>_<timestamp>.json` — same data, machine-readable
+
+Once the Job pod terminates, the `emptyDir` is gone. To retain the
+reports, enable the **uploader sidecar** (next section) — or copy them
+out manually before `ttlSecondsAfterFinished` expires (default 24h):
+
+```bash
+kubectl cp -n platform-observability \
+  <job-pod>:/app/reports/. ./local-reports/
+```
+
+## 6) Uploader sidecar (S3, Slack, HTTP)
+
+Opt-in via `uploader.enabled=true`. Uses a Kubernetes 1.29+ native
+sidecar (initContainer with `restartPolicy: Always`) so the pod
+terminates cleanly when the main container finishes.
+
+The advisor writes a `.done` sentinel file when its analysis is
+complete. The sidecar polls for that sentinel, ships the reports, and
+exits.
+
+### S3
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set uploader.enabled=true \
+  --set uploader.kind=s3 \
+  --set uploader.s3.bucket=my-reports-bucket \
+  --set uploader.s3.prefix=k8s-advisor \
+  --set uploader.s3.region=us-east-1
+```
+
+Credentials come from the pod's ServiceAccount via IRSA / Workload
+Identity / Pod Identity. For static credentials, mount a Secret via
+`uploader.extraEnv`:
+
+```yaml
+uploader:
+  extraEnv:
+    - name: AWS_ACCESS_KEY_ID
+      valueFrom: { secretKeyRef: { name: aws-creds, key: access_key } }
+    - name: AWS_SECRET_ACCESS_KEY
+      valueFrom: { secretKeyRef: { name: aws-creds, key: secret_key } }
+```
+
+S3-compatible (MinIO, R2, GCS via HMAC):
+
+```bash
+--set uploader.s3.endpointUrl=https://s3.example.com
+```
+
+### Slack
+
+Create a Slack Bot/User token with `files:write`. Store it in a Secret:
+
+```bash
+kubectl create secret generic slack-token \
+  -n platform-observability \
+  --from-literal=token=xoxb-...
+```
+
+Install:
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set uploader.enabled=true \
+  --set uploader.kind=slack \
+  --set uploader.slack.channel=C0123456789 \
+  --set uploader.slack.tokenSecret.name=slack-token \
+  --set uploader.slack.markdownOnly=true
+```
+
+`channel` must be a Channel ID (starts with `C`), not a name. The bot
+must be a member of the channel.
+
+### Generic HTTP (webhooks, ticketing, custom collectors)
+
+The sidecar POSTs each report file as `multipart/form-data` with the
+field name `file`:
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set uploader.enabled=true \
+  --set uploader.kind=http \
+  --set uploader.http.url=https://collector.example.com/upload \
+  --set 'uploader.http.headers.Authorization=Bearer <token>'
+```
+
+## 5) Verify published image signature (optional, recommended)
+
+```bash
+cosign verify \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --certificate-identity-regexp "https://github.com/<owner>/<repo>/.github/workflows/release-image.yml@refs/tags/v.*" \
+  ghcr.io/<owner>/<repo>@sha256:<published-digest>
+```
+
+## 6) Trigger an immediate run
+
+```bash
+kubectl create job \
+  --from=cronjob/k8s-scaling-advisor-k8s-scaling-advisor \
+  k8s-scaling-advisor-manual-$(date +%s) \
+  -n platform-observability
+```
+
+## 7) Inspect results
+
+```bash
+# Recent jobs
+kubectl get jobs -n platform-observability --sort-by=.metadata.creationTimestamp
+
+# Logs from a job
+kubectl logs -n platform-observability job/<job-name>
+```
+
+Reports are written to an ephemeral `emptyDir` inside the Job pod and
+disappear when the pod terminates. To retain them, enable the uploader
+sidecar (S3 / Slack / HTTP — see "Uploader sidecar" above).
+
+## RBAC guidance
+
+- Prefer **namespace-scoped** mode whenever possible.
+- Use **cluster-wide** only for central platform operations.
+- If running namespace-scoped, pass explicit `-n <namespace>` in chart args.
+- Avoid broad permissions unless your workflow requires cross-namespace collection.

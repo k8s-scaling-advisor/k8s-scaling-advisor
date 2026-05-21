@@ -821,10 +821,44 @@ def test_analyze_csv_file_generates_markdown(tmp_path: Path):
         f.write(",".join(str(row[h]) for h in headers) + "\n")
 
     output_dir = tmp_path / "reports"
-    report = analyze_csv_file(str(csv_path), output_dir=str(output_dir), generate_graphs=False)
+    written = analyze_csv_file(str(csv_path), output_dir=str(output_dir), generate_graphs=False)
 
-    report_path = Path(report)
+    report_path = Path(written["md"])
     assert report_path.exists()
     report_text = report_path.read_text(encoding="utf-8")
     assert "K8s Scaling Advisor - Analysis Report" in report_text
     assert "Prometheus Metrics:** ✅ Available" in report_text
+
+
+def test_analyze_csv_file_emits_json(tmp_path: Path):
+    row = _base_row()
+    row["CPU_P95(m)"] = "220"
+    headers = list(row.keys())
+    csv_path = tmp_path / "k8s-advisor_sandbox_20260101_010101.csv"
+
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        f.write(",".join(headers) + "\n")
+        f.write(",".join(str(row[h]) for h in headers) + "\n")
+
+    output_dir = tmp_path / "reports"
+    written = analyze_csv_file(
+        str(csv_path),
+        output_dir=str(output_dir),
+        generate_graphs=False,
+        formats=("md", "json"),
+    )
+
+    assert set(written.keys()) == {"md", "json"}
+    json_path = Path(written["json"])
+    assert json_path.exists()
+    import json as _json
+
+    payload = _json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["cluster"] == "sandbox"
+    assert payload["prometheus_used"] is True
+    assert payload["summary"]["total"] == 1
+    assert isinstance(payload["workloads"], list) and payload["workloads"]
+    workload = payload["workloads"][0]
+    # Enums must be plain strings for downstream consumers.
+    assert isinstance(workload["priority"], str)
+    assert isinstance(workload["scaling_approach"], str)

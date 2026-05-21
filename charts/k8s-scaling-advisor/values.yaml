@@ -1,0 +1,170 @@
+image:
+  # GHCR path is set by the release workflow; override per-environment as needed.
+  repository: ghcr.io/k8s-scaling-advisor/k8s-scaling-advisor
+  # Empty by default — falls back to .Chart.AppVersion (see _helpers.tpl) so
+  # `helm install` pins to the chart-tested image version. Override for dev.
+  tag: ""
+  # Preferred for production: pin by immutable digest.
+  # Example: sha256:abcd1234...
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: true
+
+rbac:
+  create: true
+  # false = namespace-scoped Role/RoleBinding (only the release namespace).
+  #         This is the default and matches the project guideline that the
+  #         advisor must run with namespace-scoped permissions.
+  # true  = cluster-wide ClusterRole/ClusterRoleBinding (all namespaces).
+  #         If you flip this on, also flip `args` to `--all-namespaces` (or
+  #         pass an explicit list of namespaces with -n).
+  clusterWide: false
+
+cronjob:
+  enabled: true
+  schedule: "0 3 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: null
+  suspend: false
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 1
+  restartPolicy: Never
+
+command:
+  - k8s-advisor
+
+# Default: scan only the release namespace, matching the namespace-scoped
+# RBAC default above. To go cluster-wide, set `rbac.clusterWide=true` AND
+# override these args with `--all-namespaces` (or list namespaces with -n).
+#
+# Strings are passed through `tpl` so values like "{{ .Release.Namespace }}"
+# render at install time.
+args:
+  - report
+  - -n
+  - "{{ .Release.Namespace }}"
+  - --format
+  - md,json
+
+# Set the cluster label that appears in report filenames and JSON output.
+# Inside a Pod there's no kubeconfig context to derive this from, so set it
+# here per-environment (e.g. "prod-us-east-1", "staging").
+clusterName: ""
+
+extraEnv: []
+
+podAnnotations: {}
+podLabels: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Reports are written to an ephemeral emptyDir inside each Job pod.
+# Capture them via the optional sidecar uploader below, or by adding your
+# own sidecar that watches `/app/reports/.done` and ships files to your
+# destination of choice (Slack, ticketing system, etc.).
+reports:
+  path: /app/reports
+
+# Optional: ship reports to S3, Slack, or an HTTP endpoint after each run.
+# Implemented as a native Kubernetes sidecar (initContainer with
+# restartPolicy: Always) so the pod terminates cleanly when the main
+# container exits. Requires Kubernetes >= 1.29.
+#
+# Coordination: the main `advisor` container writes `.done` into the
+# reports volume when its analysis is finished. The sidecar polls for
+# that sentinel, ships the files, and exits.
+uploader:
+  enabled: false
+  # One of: "s3", "slack", "http".
+  # The chart picks a sensible default image per kind; override below.
+  kind: s3
+  image:
+    # Leave repository empty to use the per-kind default
+    # (s3: amazon/aws-cli, slack/http: curlimages/curl).
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  # Polling interval (seconds) while waiting for the main container to
+  # write the `.done` sentinel.
+  pollIntervalSeconds: 5
+  # Maximum time to wait for the sentinel before giving up.
+  maxWaitSeconds: 600
+
+  # ─── kind: s3 ─────────────────────────────────────────────────────
+  # Credentials come from the pod's ServiceAccount via IRSA / Workload
+  # Identity / Pod Identity. For static credentials, mount a Secret via
+  # `extraEnv` (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY).
+  s3:
+    bucket: ""
+    prefix: "k8s-advisor"
+    region: ""
+    endpointUrl: ""  # Set for S3-compatible (MinIO, GCS via HMAC, R2)
+
+  # ─── kind: slack ──────────────────────────────────────────────────
+  # The sidecar uploads each report file to a Slack channel using
+  # `files.upload` (legacy) or `files.upload_v2` if your token supports
+  # it. Provide a Bot/User token via Secret reference.
+  slack:
+    # Channel ID (preferred — survives renames). e.g. "C0123456789"
+    channel: ""
+    # Existing Secret containing the token. Key defaults to "token".
+    tokenSecret:
+      name: ""
+      key: token
+    # Optional message prefix posted with the upload.
+    messagePrefix: "K8s Scaling Advisor report"
+    # If true, only ship the markdown summary (skip JSON / raw CSV).
+    markdownOnly: true
+
+  # ─── kind: http ───────────────────────────────────────────────────
+  # POSTs each file as multipart/form-data (field name "file"). Use this
+  # for ticketing systems, custom collectors, generic webhooks.
+  http:
+    url: ""
+    headers: {}  # e.g., { Authorization: "Bearer ..." }
+
+  extraEnv: []
+  # Mount additional secrets (e.g., for static AWS creds, custom CAs).
+  extraVolumeMounts: []
+  extraVolumes: []
