@@ -34,7 +34,7 @@ The script applies the strict OSS defaults below.
 | Require review from Code Owners | ❌ (would deadlock with 0 approvals) |
 | Require status checks to pass before merging | ✅ |
 | Require branches to be up to date before merging | ✅ |
-| Required status checks | `tests (3.9)`, `tests (3.10)`, `tests (3.11)`, `tests (3.12)`, `tests (3.13)`, `lint`, `CodeQL (python)` |
+| Required status checks | `tests (3.10)`, `tests (3.11)`, `tests (3.12)`, `tests (3.13)`, `lint`, `CodeQL (python)` |
 | Require conversation resolution before merging | ✅ |
 | Require signed commits | ✅ |
 | Require linear history | ✅ |

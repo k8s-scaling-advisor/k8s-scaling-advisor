@@ -5,7 +5,6 @@ for more robust and efficient data collection.
 """
 
 import sys
-from typing import Optional
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -321,7 +320,7 @@ def get_pod_metrics(namespace: str, label_selector: dict[str, str]) -> dict[str,
         return {"avg_cpu_m": 0.0, "avg_memory_mi": 0.0, "pod_count": 0}
 
 
-def get_hpa_for_workload(namespace: str, workload_name: str, workload_kind: str) -> Optional[dict]:
+def get_hpa_for_workload(namespace: str, workload_name: str, workload_kind: str) -> dict | None:
     """Check if HPA exists for a workload.
 
     Args:

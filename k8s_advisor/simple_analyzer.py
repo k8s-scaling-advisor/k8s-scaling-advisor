@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 # Import constants
 try:
@@ -1310,8 +1309,8 @@ def generate_report(
     analyses: list[WorkloadAnalysis],
     output_path: str,
     has_prometheus: bool,
-    graphs_dir: Optional[str] = None,
-    data_quality_warnings: Optional[list[dict]] = None,
+    graphs_dir: str | None = None,
+    data_quality_warnings: list[dict] | None = None,
 ):
     """Render the markdown report from k8s_advisor/templates/report.md.j2.
 

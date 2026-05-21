@@ -35,7 +35,6 @@ echo "==> Applying branch protection to ${REPO}:main"
 # ─── Required status checks ─────────────────────────────────────────────
 # These names must match the `name:` field of your workflow jobs.
 REQUIRED_CHECKS=(
-    "tests (3.9)"
     "tests (3.10)"
     "tests (3.11)"
     "tests (3.12)"
