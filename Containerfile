@@ -8,31 +8,15 @@ LABEL org.opencontainers.image.source="https://github.com/k8s-scaling-advisor/k8
       org.opencontainers.image.description="Kubernetes resource optimization and autoscaling advisor" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-ARG KUBECTL_VERSION=v1.30.2
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# kubectl is required for Prometheus auto-detection/port-forward paths.
-# curl is build-time only and is removed before the layer is committed.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && arch="$(dpkg --print-architecture)" \
-    && case "$arch" in \
-         amd64) kubectl_arch="amd64" ;; \
-         arm64) kubectl_arch="arm64" ;; \
-         *) echo "Unsupported architecture: $arch" && exit 1 ;; \
-       esac \
-    && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${kubectl_arch}/kubectl" -o /usr/local/bin/kubectl \
-    && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${kubectl_arch}/kubectl.sha256" -o /tmp/kubectl.sha256 \
-    && echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c - \
-    && rm -f /tmp/kubectl.sha256 \
-    && chmod +x /usr/local/bin/kubectl \
-    && apt-get purge -y --auto-remove curl \
-    && rm -rf /var/lib/apt/lists/*
+# No kubectl, no curl: discovery and port-forwarding are handled by the
+# `kubernetes` Python client (see k8s_advisor/collector/prometheus.py).
+# Reduces image size and the supply-chain surface to just Python deps.
 
 COPY requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt

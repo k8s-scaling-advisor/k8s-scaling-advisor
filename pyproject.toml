@@ -42,10 +42,10 @@ ignore = [
 # access-mode probe) intentionally swallow exceptions — the function
 # returns a sentinel that callers handle.
 "k8s_advisor/collector/kubernetes.py" = ["S110", "S112"]
-# prometheus.py: subprocess calls invoke kubectl/gpg/git which are
-# PATH-resolved by design (S607) and use shell=False with argument lists
-# (S603 is the bandit "review" warning for any subprocess.run call).
-"k8s_advisor/collector/prometheus.py" = ["S603", "S607"]
+# prometheus.py: every detection / port-forward path is documented as
+# best-effort — failures return None/empty per the function contracts, so
+# bare-except + pass/continue is the *intended* behavior here.
+"k8s_advisor/collector/prometheus.py" = ["S110", "S112", "SIM105"]
 
 [tool.ruff.format]
 quote-style = "double"
