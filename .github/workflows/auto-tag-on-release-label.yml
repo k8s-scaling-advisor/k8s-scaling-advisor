@@ -95,3 +95,27 @@ jobs:
           # invoked, not via the tag push event itself.
           git push origin "${TAG}"
           echo "::notice::Pushed ${TAG} — release-image.yml will fire via workflow_run."
+
+      - name: Record tag for downstream workflow
+        if: steps.check.outputs.skipped != 'true'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          # Hand the tag name to release-image.yml via an artifact.
+          # `workflow_run` is the recommended-for-untrusted-input
+          # downstream pattern, and the artifact is the recommended way
+          # to pass values between the two workflows. This avoids the
+          # race where release-image runs `git for-each-ref` and picks
+          # up a different (manually-pushed) tag that arrived between
+          # our push and its checkout.
+          mkdir -p release-meta
+          printf '%s' "${TAG}" > release-meta/tag
+
+      - name: Upload tag artifact
+        if: steps.check.outputs.skipped != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: release-tag
+          path: release-meta/tag
+          retention-days: 1
+          if-no-files-found: error

@@ -46,6 +46,7 @@ jobs:
       packages: write
       id-token: write
       security-events: write
+      actions: read   # download-artifact needs this for cross-run reads
     outputs:
       image_ref: ${{ steps.export.outputs.image_ref }}
       image_digest: ${{ steps.export.outputs.image_digest }}
@@ -75,6 +76,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Pull the tag value the upstream auto-tag workflow recorded.
+      # Only runs on the workflow_run path; the upstream wrote a
+      # one-line file via actions/upload-artifact called `release-tag`.
+      # Using an artifact (rather than `git for-each-ref` to discover
+      # the latest tag) makes tag selection deterministic — a manual
+      # `git tag v0.0.9-hotfix && git push --tags` racing in between
+      # the auto-tag push and this step can't redirect the build.
+      - name: Download upstream release-tag artifact
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: release-tag
+          path: ./release-meta
+          # `workflow_run` artifacts live on the *triggering* run, not
+          # the current one — point download-artifact at it explicitly.
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Compute release variables
         id: vars
         env:
@@ -87,24 +106,28 @@ jobs:
           # Three trigger paths:
           #   1. workflow_dispatch with `tag` input -> use it verbatim.
           #   2. push: tags     -> derive from the pushed tag's name.
-          #   3. workflow_run   -> resolve the most-recent v* tag (the
-          #                       auto-tag workflow just pushed it).
+          #   3. workflow_run   -> read the tag the upstream workflow
+          #                       recorded into the release-tag artifact
+          #                       (deterministic, race-free).
           if [ -n "${INPUT_TAG}" ]; then
             IMAGE_TAG="${INPUT_TAG}"
           elif [ "${REF_TYPE}" = "tag" ]; then
             IMAGE_TAG="${REF_NAME#v}"
           elif [ "${EVENT_NAME}" = "workflow_run" ]; then
-            # Fetch tags fresh in case the upstream push raced ours.
-            git fetch --tags --force origin >/dev/null 2>&1
-            LATEST_TAG="$(git for-each-ref --sort=-creatordate --format='%(refname:short)' --count=1 'refs/tags/v*')"
-            if [ -z "${LATEST_TAG}" ]; then
-              echo "::error::workflow_run trigger but no v* tag found"
+            if [ ! -f release-meta/tag ]; then
+              echo "::error::workflow_run trigger but no release-tag artifact"
               exit 1
             fi
+            UPSTREAM_TAG="$(cat release-meta/tag)"
+            if [ -z "${UPSTREAM_TAG}" ]; then
+              echo "::error::release-tag artifact is empty"
+              exit 1
+            fi
+            git fetch origin "refs/tags/${UPSTREAM_TAG}:refs/tags/${UPSTREAM_TAG}" --no-tags
             # Check out the tag so the build is reproducible against
             # the tagged tree, not whatever main happens to be now.
-            git checkout "${LATEST_TAG}"
-            IMAGE_TAG="${LATEST_TAG#v}"
+            git checkout "${UPSTREAM_TAG}"
+            IMAGE_TAG="${UPSTREAM_TAG#v}"
           else
             IMAGE_TAG="${SHA::12}"
           fi
