@@ -20,7 +20,6 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
 
 # Add k8s_advisor to path (handle both installed and development mode)
 project_root = Path(__file__).parent
@@ -39,7 +38,7 @@ def collect_workload_data(
     cluster: str,
     use_prometheus: bool = False,
     prom_port: int = 9091,
-    auth: Optional[Union[tuple[str, str], str]] = None,
+    auth: tuple[str, str] | str | None = None,
 ) -> dict:
     """Collect comprehensive data for a single workload.
 

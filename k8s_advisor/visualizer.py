@@ -393,8 +393,8 @@ def _priority_distribution(analyses: Sequence, output_path: Path) -> bool:
         return False
 
     # Filter out empty wedges so the pie doesn't draw 0% slices.
-    visible = [(c, lbl, col) for c, lbl, col in zip(counts, labels, colors) if c > 0]
-    counts, labels, colors = zip(*visible)
+    visible = [(c, lbl, col) for c, lbl, col in zip(counts, labels, colors, strict=False) if c > 0]
+    counts, labels, colors = zip(*visible, strict=False)
 
     _fig, ax = plt.subplots(figsize=(10, 8))
     _wedges, _texts, autotexts = ax.pie(
@@ -485,7 +485,7 @@ def _stability_analysis(analyses: Sequence, output_path: Path) -> bool:
         ax2.invert_yaxis()
         ax2.set_xlabel("Restarts (rate per day, fallback to total count)", fontsize=11)
         ax2.grid(axis="x", alpha=0.3)
-        for bar, suffix in zip(bars, suffixes):
+        for bar, suffix in zip(bars, suffixes, strict=False):
             ax2.text(
                 bar.get_width(), bar.get_y() + bar.get_height() / 2, f" {suffix}", va="center", fontsize=8, alpha=0.7
             )
@@ -614,7 +614,7 @@ def _fleet_capacity(analyses: Sequence, output_path: Path) -> bool:
         ax.legend(loc="lower right")
         ax.grid(axis="x", alpha=0.3)
         # Annotate utilization % on each row
-        for i, (u, r) in enumerate(zip(used, req)):
+        for i, (u, r) in enumerate(zip(used, req, strict=False)):
             if r > 0:
                 pct = (u / r) * 100
                 ax.text(r, i, f" {pct:.0f}%", va="center", fontsize=8, alpha=0.7)
@@ -668,7 +668,7 @@ def _pattern_group_impact(analyses: Sequence, output_path: Path) -> bool:
     ax.grid(axis="x", alpha=0.3)
 
     # Annotate priority and count.
-    for i, (g, n) in enumerate(zip(groups, sizes)):
+    for i, (g, n) in enumerate(zip(groups, sizes, strict=False)):
         ax.text(n, i, f" {g.priority} × {n}", va="center", fontsize=9, alpha=0.85)
 
     from matplotlib.patches import Patch
@@ -724,7 +724,7 @@ def _p95_vs_request(analyses: Sequence, output_path: Path) -> bool:
 
     _fig, ax = plt.subplots(figsize=(12, 8))
     colors = []
-    for cr, mr in zip(cpu_ratio, mem_ratio):
+    for cr, mr in zip(cpu_ratio, mem_ratio, strict=False):
         if cr > 1 or mr > 1:
             colors.append("red")  # under-provisioned (real risk)
         elif cr < 0.3 and mr < 0.3:

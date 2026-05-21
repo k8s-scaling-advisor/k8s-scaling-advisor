@@ -17,17 +17,17 @@ import json
 import random
 import subprocess
 import time
-from typing import Any, Optional, Union
+from typing import Any
 
 
 def _request_with_retry(
     url: str,
     params: dict[str, Any],
     timeout: int = 10,
-    auth: Optional[tuple[str, str]] = None,
-    headers: Optional[dict[str, str]] = None,
+    auth: tuple[str, str] | None = None,
+    headers: dict[str, str] | None = None,
     max_attempts: int = 3,
-) -> Optional[Any]:
+) -> Any | None:
     """GET with exponential backoff retry on 429 / 5xx.
 
     Used for Prometheus queries — `requests` is imported lazily so the
@@ -307,7 +307,7 @@ def find_all_services_with_prometheus() -> list[dict[str, Any]]:
         return []
 
 
-def find_prometheus_service_from_crds() -> Optional[dict[str, Any]]:
+def find_prometheus_service_from_crds() -> dict[str, Any] | None:
     """Find Prometheus service after CRDs are detected.
 
     When CRDs are found, this looks for the actual Prometheus service
@@ -345,7 +345,7 @@ def find_prometheus_service_from_crds() -> Optional[dict[str, Any]]:
     return services[0] if services else None
 
 
-def find_service_by_labels(labels: list[str]) -> Optional[dict[str, Any]]:
+def find_service_by_labels(labels: list[str]) -> dict[str, Any] | None:
     """Find service by label selector.
 
     Args:
@@ -386,7 +386,7 @@ def find_service_by_labels(labels: list[str]) -> Optional[dict[str, Any]]:
     return None
 
 
-def detect_prometheus_operator() -> Optional[dict[str, Any]]:
+def detect_prometheus_operator() -> dict[str, Any] | None:
     """Check for Prometheus operator deployment.
 
     Returns:
@@ -419,7 +419,7 @@ def detect_prometheus_operator() -> Optional[dict[str, Any]]:
     return None
 
 
-def find_prometheus_service_in_namespace(namespace: str) -> Optional[dict[str, Any]]:
+def find_prometheus_service_in_namespace(namespace: str) -> dict[str, Any] | None:
     """Find Prometheus service in a specific namespace.
 
     Args:
@@ -469,7 +469,7 @@ def find_prometheus_service_in_namespace(namespace: str) -> Optional[dict[str, A
 
 def start_port_forward(
     service_name: str, namespace: str, local_port: int = 9091, remote_port: int = 9090
-) -> Optional[subprocess.Popen]:
+) -> subprocess.Popen | None:
     """Start kubectl port-forward for Prometheus service.
 
     Args:
@@ -509,7 +509,7 @@ def start_port_forward(
 
 
 def wait_for_prometheus(
-    port: int = 9091, max_attempts: int = 10, auth: Optional[Union[tuple[str, str], str]] = None
+    port: int = 9091, max_attempts: int = 10, auth: tuple[str, str] | str | None = None
 ) -> bool:
     """Wait for Prometheus to be available on localhost.
 
@@ -525,7 +525,7 @@ def wait_for_prometheus(
     """
     url = f"http://localhost:{port}/api/v1/query?query=up"
 
-    def build_curl_cmd(url: str, auth: Optional[Union[tuple[str, str], str]]) -> list[str]:
+    def build_curl_cmd(url: str, auth: tuple[str, str] | str | None) -> list[str]:
         """Build a curl argv list, optionally adding Basic-Auth or Bearer-Token flags."""
         cmd = ["curl", "-s", "-f", url]
         if auth:
@@ -597,7 +597,7 @@ def query_cpu_percentiles(
     pod_pattern: str,
     time_range: str = "7d",
     port: int = 9091,
-    auth: Optional[Union[tuple[str, str], str]] = None,
+    auth: tuple[str, str] | str | None = None,
 ) -> dict[str, float]:
     """Query CPU percentiles from Prometheus.
 
@@ -723,7 +723,7 @@ def query_memory_volatility(
     pod_pattern: str,
     time_range: str = "7d",
     port: int = 9091,
-    auth: Optional[Union[tuple[str, str], str]] = None,
+    auth: tuple[str, str] | str | None = None,
 ) -> dict[str, float]:
     """Query memory volatility metrics from Prometheus.
 
@@ -893,7 +893,7 @@ def query_cpu_throttle_pct(
     pod_pattern: str,
     time_range: str = "7d",
     port: int = 9091,
-    auth: Optional[Union[tuple[str, str], str]] = None,
+    auth: tuple[str, str] | str | None = None,
 ) -> float:
     """Query CPU throttle percentage from Prometheus.
 
@@ -980,7 +980,7 @@ def query_cpu_throttle_pct(
 
 
 def query_days_since_last_restart(
-    namespace: str, pod_pattern: str, port: int = 9091, auth: Optional[Union[tuple[str, str], str]] = None
+    namespace: str, pod_pattern: str, port: int = 9091, auth: tuple[str, str] | str | None = None
 ) -> float:
     """Query days since last restart from Prometheus.
 
@@ -1040,7 +1040,7 @@ def query_restart_rate(
     pod_pattern: str,
     time_range: str = "7d",
     port: int = 9091,
-    auth: Optional[Union[tuple[str, str], str]] = None,
+    auth: tuple[str, str] | str | None = None,
 ) -> float:
     """Query restart rate from Prometheus.
 
