@@ -36,25 +36,37 @@ talks directly to the API server.
 
 ## 2) Deploy with Helm
 
-Each release publishes the chart as an OCI artifact alongside the image:
+Two equally-valid sources for the chart. Pick whichever fits your flow:
 
-```text
-oci://ghcr.io/<owner>/charts/k8s-scaling-advisor
-```
+| Source | Use when |
+|---|---|
+| `oci://ghcr.io/<owner>/charts/k8s-scaling-advisor` (pinned) | Production / CI / Argo / Flux / shipping a release tag without cloning the repo |
+| `./charts/k8s-scaling-advisor` (local source) | You've cloned the repo for development, you're hacking on values, or you want to pin to `main` |
 
-The exact `--version` and the digest-pinned `--set image.digest` for any
-release are printed on its GitHub Release page. No `git clone` required.
+Each release publishes the chart as an OCI artifact alongside the image; the
+exact `--version` is printed on the GitHub Release page. The local source
+always reflects the current branch.
 
-For local-development installs, the chart source still lives at
-`charts/k8s-scaling-advisor/` in this repo and you can `helm install` from
-that path directly.
+The examples below show both invocations. Anywhere you see `./charts/...`
+works, the equivalent `oci://...` works too, and vice versa.
 
 ### Namespace-scoped deployment (default)
+
+From the OCI artifact (pinned release):
 
 ```bash
 helm upgrade --install k8s-scaling-advisor \
   oci://ghcr.io/<owner>/charts/k8s-scaling-advisor \
   --version <chart-version> \
+  --namespace platform-observability \
+  --create-namespace \
+  --set image.digest=sha256:<published-digest>
+```
+
+From a local checkout (development / unreleased changes on `main`):
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   --namespace platform-observability \
   --create-namespace \
   --set image.digest=sha256:<published-digest>
@@ -72,12 +84,26 @@ namespace-scoped permissions (no cluster-admin required).
 ### Cluster-wide deployment
 
 When you want fleet visibility, flip both `rbac.clusterWide=true` AND
-the args to `--all-namespaces`:
+the args to `--all-namespaces`. Either chart source works — pick one:
 
 ```bash
+# OCI (pinned release)
 helm upgrade --install k8s-scaling-advisor \
   oci://ghcr.io/<owner>/charts/k8s-scaling-advisor \
   --version <chart-version> \
+  --namespace platform-observability \
+  --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set rbac.clusterWide=true \
+  --set-string 'args[0]=report' \
+  --set-string 'args[1]=--all-namespaces' \
+  --set-string 'args[2]=--format' \
+  --set-string 'args[3]=md,json'
+```
+
+```bash
+# Local checkout
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   --namespace platform-observability \
   --create-namespace \
   --set image.digest=sha256:<published-digest> \
