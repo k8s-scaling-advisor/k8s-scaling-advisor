@@ -262,7 +262,7 @@ client-credentials. One-time setup, then it works on every release.
 In Teams, click the channel → **More options** (⋯) → **Get link to
 channel**. The link looks like:
 
-```
+```text
 https://teams.microsoft.com/l/channel/19%3a<CHANNEL_ID>%40thread.tacv2/
 General?groupId=<TEAM_ID>&tenantId=<TENANT_ID>
 ```

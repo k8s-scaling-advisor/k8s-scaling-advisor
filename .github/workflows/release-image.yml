@@ -32,14 +32,64 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Cheap gate that runs only on workflow_run. Downloads the release-meta
+  # artifact the upstream auto-tag wrote and decides whether this is an
+  # actual release or a clean skip (tag already existed). Other trigger
+  # types (push: tags, workflow_dispatch) bypass this entirely.
+  resolve-trigger:
+    name: Resolve release trigger
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Download release-meta artifact
+        if: github.event.workflow_run.conclusion == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: release-tag
+          path: ./release-meta
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read status
+        id: check
+        run: |
+          # If the upstream auto-tag workflow failed, conclusion != success
+          # and the download step above was skipped — treat as "no release".
+          if [ ! -f release-meta/status ]; then
+            echo "::notice::upstream auto-tag run did not produce a release-meta artifact (conclusion=${{ github.event.workflow_run.conclusion }}); skipping"
+            echo "proceed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          STATUS="$(cat release-meta/status)"
+          case "$STATUS" in
+            release)
+              echo "::notice::auto-tag pushed a release; proceeding"
+              echo "proceed=true" >> "${GITHUB_OUTPUT}"
+              ;;
+            skipped)
+              echo "::notice::auto-tag exited cleanly without a new tag (status=skipped); skipping"
+              echo "proceed=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "::error::unknown release-meta/status value: ${STATUS}"
+              exit 1
+              ;;
+          esac
+
   build-sign-publish:
     name: Build, scan, sign, publish image
-    # Skip when the upstream auto-tag workflow failed or didn't push a tag.
-    # For `push: tags` and `workflow_dispatch` events, this expression
-    # evaluates to true (no triggering_workflow.conclusion to compare).
+    # workflow_run path goes through the resolve-trigger gate first.
+    # push: tags / workflow_dispatch always proceed.
+    needs: [resolve-trigger]
     if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
+      always() &&
+      (github.event_name != 'workflow_run' ||
+       (needs.resolve-trigger.result == 'success' &&
+        needs.resolve-trigger.outputs.proceed == 'true'))
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -143,8 +143,10 @@ uploader:
   kind: s3
   image:
     # Leave repository empty to use the per-kind default:
-    #   s3                -> amazon/aws-cli
-    #   slack/http/teams  -> curlimages/curl
+    #   s3          -> amazon/aws-cli
+    #   slack/http  -> curlimages/curl
+    #   teams       -> mcr.microsoft.com/azure-cli (needs jq + python
+    #                  for Microsoft Graph response parsing)
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
