@@ -41,6 +41,16 @@
 **Rationale:** {{ analysis.rationale }}
 
 {% endif -%}
+{# Render whenever scoring actually ran. We use confidence_reasons as the
+   "did it run" signal because confidence=0.0 is also the dataclass
+   default for analyses constructed without going through analyze_workload
+   (e.g. unit-test fixtures); a score of 0.0 produced by the scorer is a
+   meaningful "no confidence" answer that we still want to surface. #}
+{% if analysis.confidence_reasons -%}
+{% set _band_emoji = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(analysis.confidence_band, "⚪") -%}
+**Confidence:** {{ _band_emoji }} {{ analysis.confidence_band }} ({{ "%.2f" | format(analysis.confidence) }}) — {{ analysis.confidence_reasons | join("; ") }}
+
+{% endif -%}
 {% if collapse_note -%}
 > _{{ collapse_note }}_
 

@@ -8,7 +8,7 @@ Works with namespace-scoped permissions (no cluster-admin required).
 import csv
 import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -16,22 +16,30 @@ from pathlib import Path
 # Import constants
 try:
     from k8s_advisor.constants import (
+        BASE_SCORE_NO_PROM,
+        BASE_SCORE_PROMETHEUS,
+        BURSTY_PENALTY,
         BURSTY_WORKLOAD_PATTERNS,
         CPU_MIN_RECOMMENDED_M,
         CPU_OVER_REQUESTED_THRESHOLD,
         CPU_REDUCTION_BASELINE_M,
         CPU_REDUCTION_MIN_SAVING_M,
         CPU_UNDER_REQUESTED_THRESHOLD,
+        GC_PENALTY,
         GC_RUNTIME_PATTERNS,
         HEADROOM_MULTIPLIER,
         HEADROOM_MULTIPLIER_HIGH_VOLATILITY,
         HEADROOM_MULTIPLIER_MID_VOLATILITY,
+        HIGH_CONF_THRESHOLD,
         HPA_TARGET_UTILIZATION_DEFAULT,
+        INSUFFICIENT_DATA_SCORE,
+        LIMITS_BONUS,
         LOW_CONFIDENCE_MAX_RESTARTS_PER_POD,
         LOW_CONFIDENCE_RESTART_RATE_PER_DAY,
         LOW_CONFIDENCE_TOTAL_RESTARTS,
         LOW_SIGNAL_CPU_M,
         LOW_SIGNAL_MEM_MI,
+        MEDIUM_CONF_THRESHOLD,
         MEM_OVER_REQUESTED_THRESHOLD,
         MEM_SATURATION_LIMIT_THRESHOLD,
         MEM_UNDER_REQUESTED_THRESHOLD,
@@ -40,6 +48,9 @@ try:
         OWNER_LABEL_KEYS,
         REQUESTS_NOT_SET_P0_CPU_M,
         REQUESTS_NOT_SET_P0_MEM_MI,
+        RESTART_PENALTY,
+        RESTART_RATE_THRESHOLD,
+        SINGLE_REPLICA_PENALTY,
         UNSTABLE_RESTART_RATE_THRESHOLD,
         UNSTABLE_RESTART_THRESHOLD,
     )
@@ -77,6 +88,18 @@ except ImportError:
     )
     GC_RUNTIME_PATTERNS = set()
     BURSTY_WORKLOAD_PATTERNS = set()
+    # Confidence-scoring fallbacks (must mirror constants.py defaults).
+    INSUFFICIENT_DATA_SCORE = 0.10
+    BASE_SCORE_PROMETHEUS = 0.85
+    BASE_SCORE_NO_PROM = 0.55
+    BURSTY_PENALTY = 0.20
+    GC_PENALTY = 0.15
+    RESTART_PENALTY = 0.15
+    SINGLE_REPLICA_PENALTY = 0.05
+    RESTART_RATE_THRESHOLD = 2.0
+    LIMITS_BONUS = 0.05
+    HIGH_CONF_THRESHOLD = 0.75
+    MEDIUM_CONF_THRESHOLD = 0.50
 
 
 class Priority(Enum):
@@ -163,6 +186,19 @@ class WorkloadAnalysis:
     gc_runtime: bool = False
     bursty_workload: bool = False
 
+    # Numeric confidence score in [0.0, 1.0] for the recommendation
+    # itself. Computed from the observable-evidence signals (Prometheus
+    # availability, restart noise, runtime shape, etc.) — see
+    # _confidence_score(). Useful for downstream gating ("only act on
+    # recommendations >= 0.7").
+    confidence: float = 0.0
+    # Human-readable rollup ("high" / "medium" / "low") derived from
+    # `confidence`. Convenience for the markdown report.
+    confidence_band: str = "low"
+    # Short human-readable strings describing what dragged confidence
+    # down (or up). Surfaces in the markdown rationale.
+    confidence_reasons: list = field(default_factory=list)
+
     # Quantified per-workload deltas, signed in millicores / Mi.
     # Positive = recommended request is below current (savings).
     # Negative = recommended request raises the floor (more capacity needed).
@@ -189,6 +225,63 @@ def safe_int(value, default=0):
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _confidence_score(
+    *,
+    has_prometheus: bool,
+    insufficient_data: bool,
+    gc_runtime: bool,
+    bursty_workload: bool,
+    restart_rate: float,
+    pod_count: int,
+    has_cpu_limit: bool,
+    has_mem_limit: bool,
+) -> tuple:
+    """Score the recommendation's data-quality from 0.0 to 1.0.
+
+    The score is heuristic, not statistical — it rolls up the same
+    boolean signals the analyzer already computes into a single number
+    plus a list of human-readable reasons. Downstream tooling can use
+    the number for gating ("auto-act on >= 0.8") and the reasons for
+    UI / report rendering.
+
+    Returns ``(score, band, reasons)`` where ``band`` is one of
+    "high" / "medium" / "low".
+    """
+    reasons: list = []
+    if insufficient_data:
+        # Floor: when the data itself is missing/misleading no scoring
+        # heuristic recovers it.
+        return (INSUFFICIENT_DATA_SCORE, "low", ["INSUFFICIENT_DATA — no usable signal"])
+
+    score = BASE_SCORE_PROMETHEUS if has_prometheus else BASE_SCORE_NO_PROM
+    reasons.append("Prometheus metrics available" if has_prometheus else "kubectl-only metrics-server data")
+
+    if bursty_workload:
+        score -= BURSTY_PENALTY
+        reasons.append("bursty runtime — peaks under-represented")
+    if gc_runtime:
+        score -= GC_PENALTY
+        reasons.append("GC-managed runtime — memory shape distorted")
+    if restart_rate > RESTART_RATE_THRESHOLD:
+        score -= RESTART_PENALTY
+        reasons.append(f"restart rate {restart_rate:.1f}/day — metrics include crash-loop noise")
+    if pod_count <= 1:
+        score -= SINGLE_REPLICA_PENALTY
+        reasons.append("single replica — no peer averaging")
+    if has_cpu_limit and has_mem_limit:
+        score += LIMITS_BONUS
+        reasons.append("CPU + memory limits set — saturation observable")
+
+    score = max(0.0, min(1.0, score))
+    if score >= HIGH_CONF_THRESHOLD:
+        band = "high"
+    elif score >= MEDIUM_CONF_THRESHOLD:
+        band = "medium"
+    else:
+        band = "low"
+    return (round(score, 2), band, reasons)
 
 
 def build_rationale(analysis: WorkloadAnalysis, has_prometheus: bool) -> str:
@@ -875,6 +968,21 @@ def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
         cpu_delta_m=cpu_delta_m,
         mem_delta_mi=mem_delta_mi,
     )
+
+    # Confidence score (used for downstream gating + report rendering).
+    score, band, reasons = _confidence_score(
+        has_prometheus=has_prometheus,
+        insufficient_data=insufficient_data,
+        gc_runtime=gc_runtime,
+        bursty_workload=bursty_workload,
+        restart_rate=restart_rate,
+        pod_count=pod_count,
+        has_cpu_limit=cpu_limit > 0,
+        has_mem_limit=mem_limit > 0,
+    )
+    analysis.confidence = score
+    analysis.confidence_band = band
+    analysis.confidence_reasons = reasons
 
     # Build rationale
     analysis.rationale = build_rationale(analysis, has_prometheus)
