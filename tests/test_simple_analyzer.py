@@ -973,3 +973,113 @@ def test_analyze_workload_confidence_lower_without_prometheus():
     p_workload = analyze_workload(row, has_prometheus=True)
     k_workload = analyze_workload(row, has_prometheus=False)
     assert k_workload.confidence < p_workload.confidence
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Per-namespace policy profiles
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_analyze_workload_default_profile_matches_constants():
+    """Calling without a profile produces the historical (constants.py) numbers."""
+    from k8s_advisor.profiles import DEFAULT_PROFILE
+
+    row = _base_row()
+    row["CPU_P95(m)"] = "800"
+    row["Mem_P95(Mi)"] = "600"
+    row["Mem_Volatility_CV"] = "0"
+
+    no_profile = analyze_workload(row, has_prometheus=True)
+    with_default = analyze_workload(row, has_prometheus=True, profile=DEFAULT_PROFILE)
+
+    assert no_profile.recommended_cpu == with_default.recommended_cpu
+    assert no_profile.recommended_mem == with_default.recommended_mem
+    assert no_profile.policy_name == "default"
+
+
+def test_analyze_workload_custom_profile_lifts_recommendations():
+    """A higher cpu/mem_headroom profile produces larger recommended numbers."""
+    from k8s_advisor.profiles import Profile
+
+    row = _base_row()
+    row["CPU_P95(m)"] = "800"
+    row["Mem_P95(Mi)"] = "600"
+    row["Mem_Volatility_CV"] = "0"
+
+    tight = analyze_workload(
+        row, has_prometheus=True, profile=Profile(name="tight", cpu_headroom=1.10, mem_headroom=1.10)
+    )
+    loose = analyze_workload(
+        row, has_prometheus=True, profile=Profile(name="loose", cpu_headroom=1.50, mem_headroom=1.50)
+    )
+
+    # P95(800) * 1.10 = 880m  vs  P95(800) * 1.50 = 1200m → 1.2 cores
+    assert tight.recommended_cpu == "880m"
+    assert loose.recommended_cpu == "1.2"
+    assert tight.policy_name == "tight"
+    assert loose.policy_name == "loose"
+
+
+def test_analyze_workload_custom_pct_thresholds_change_issues():
+    """Tightening cpu_under_pct moves a workload into CPU_UNDER_REQUESTED."""
+    from k8s_advisor.profiles import Profile
+
+    # 60% utilization — under the default 85% threshold (no issue),
+    # but over a tightened 50% threshold (flagged).
+    row = _base_row()
+    row["Avg_CPU_Usage(m)"] = "120"
+    row["CPU_Request(m)"] = "200"
+
+    default_run = analyze_workload(row, has_prometheus=False)
+    tight_run = analyze_workload(row, has_prometheus=False, profile=Profile(name="strict", cpu_under_pct=50))
+
+    assert "CPU_UNDER_REQUESTED" not in default_run.issues
+    assert "CPU_UNDER_REQUESTED" in tight_run.issues
+
+
+def test_analyze_csv_file_threads_profile_per_namespace(tmp_path: Path):
+    """analyze_csv_file resolves a per-namespace profile and tags policy_name."""
+    import csv as _csv
+
+    # Two rows in different namespaces, identical metrics. The profile
+    # file lifts cpu_headroom for one namespace; we expect the
+    # recommendations to diverge and policy_name to differ.
+    rows = []
+    for ns in ("default", "prod-api"):
+        r = _base_row()
+        r["Namespace"] = ns
+        r["CPU_P95(m)"] = "800"
+        r["Mem_P95(Mi)"] = "600"
+        r["Mem_Volatility_CV"] = "0"
+        rows.append(r)
+
+    csv_path = tmp_path / "in.csv"
+    with csv_path.open("w", newline="") as f:
+        writer = _csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    policy_path = tmp_path / "policies.yaml"
+    policy_path.write_text(
+        "namespaces:\n  prod-api:\n    cpu_headroom: 1.50\n",
+        encoding="utf-8",
+    )
+
+    out_dir = tmp_path / "reports"
+    written = analyze_csv_file(
+        csv_path=str(csv_path),
+        output_dir=str(out_dir),
+        formats=("md",),
+        profiles_path=str(policy_path),
+    )
+
+    md = Path(written["md"]).read_text(encoding="utf-8")
+    # Default-namespace workload: 800 * 1.25 = 1.0 cores
+    assert "1.0" in md
+    # prod-api workload: 800 * 1.50 = 1.2 cores
+    assert "1.2" in md
+    # The non-default namespace shows the policy tag.
+    assert "[Policy: prod-api]" in md
+    # The default namespace does NOT show a tag (avoids visual noise for
+    # the no-profile case).
+    assert "[Policy: default]" not in md

@@ -3,7 +3,8 @@
 {% if analysis.gc_runtime -%}{% set _ = markers.append("GC_RUNTIME") %}{% endif -%}
 {% if analysis.bursty_workload -%}{% set _ = markers.append("BURSTY_WORKLOAD") %}{% endif -%}
 {% set marker_str = (" — " + markers | join(" | ")) if markers else "" -%}
-#### `{{ analysis.namespace }}/{{ analysis.deployment }}` ({{ analysis.workload_type }}){{ marker_str }}
+{% set policy_str = "  [Policy: " + analysis.policy_name + "]" if analysis.policy_name and analysis.policy_name != "default" else "" -%}
+#### `{{ analysis.namespace }}/{{ analysis.deployment }}` ({{ analysis.workload_type }}){{ marker_str }}{{ policy_str }}
 
 {% if analysis.issues -%}
 **Issues:**

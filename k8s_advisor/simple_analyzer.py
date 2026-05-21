@@ -101,6 +101,11 @@ except ImportError:
     HIGH_CONF_THRESHOLD = 0.75
     MEDIUM_CONF_THRESHOLD = 0.50
 
+# Profile imports live below the constants fallback so the analyzer
+# still loads if a partial install is missing constants.py — profiles.py
+# imports from constants.py too, so it'd fail in that scenario anyway.
+from k8s_advisor.profiles import DEFAULT_PROFILE, DEFAULT_PROFILE_SET, Profile
+
 
 class Priority(Enum):
     """Workload priority bucket. P0 = act now, P3 = no action needed."""
@@ -213,6 +218,11 @@ class WorkloadAnalysis:
     previously_seen: bool = False  # True iff fingerprint was in prior state
     times_seen: int = 1  # how many runs have produced this exact recommendation
     first_seen: str = ""  # ISO-8601 timestamp of first observation
+
+    # Name of the per-namespace profile that drove this row's numbers.
+    # "default" when no --profiles flag was passed, or when the namespace
+    # has no override in the policy file.
+    policy_name: str = "default"
 
 
 def safe_float(value, default=0.0):
@@ -547,8 +557,22 @@ def _has_prometheus_signal(avg_cpu: float, avg_mem: float, cpu_p95: float, mem_p
     return not (no_avg and no_p95)
 
 
-def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
-    """Analyze a single workload from CSV row with comprehensive Prometheus metrics."""
+def analyze_workload(
+    row: dict,
+    has_prometheus: bool,
+    *,
+    profile: Profile = DEFAULT_PROFILE,
+) -> WorkloadAnalysis:
+    """Analyze a single workload from CSV row with comprehensive Prometheus metrics.
+
+    Args:
+        row: Parsed CSV row from the collect phase.
+        has_prometheus: Whether the source CSV has Prometheus columns populated.
+        profile: Per-namespace policy knobs (headroom, guardrail floors,
+            efficiency thresholds). Defaults to ``DEFAULT_PROFILE`` which
+            mirrors ``constants.py`` so existing callers see no behavior
+            change.
+    """
 
     # Parse basic data
     namespace = row.get("Namespace", "")
@@ -661,21 +685,21 @@ def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
     effective_mem = mem_p95 if has_prometheus and mem_p95 > 0 else avg_mem
 
     if cpu_request > 0:
-        if effective_cpu > cpu_request * (CPU_UNDER_REQUESTED_THRESHOLD / 100) and effective_cpu < cpu_request * 2.0:
+        if effective_cpu > cpu_request * (profile.cpu_under_pct / 100) and effective_cpu < cpu_request * 2.0:
             issues.append("CPU_UNDER_REQUESTED")
             if priority.value > Priority.P2.value:
                 priority = Priority.P2
-        elif effective_cpu < cpu_request * (CPU_OVER_REQUESTED_THRESHOLD / 100):
+        elif effective_cpu < cpu_request * (profile.cpu_over_pct / 100):
             issues.append("CPU_OVER_REQUESTED")
             if priority.value > Priority.P2.value:
                 priority = Priority.P2
 
     if mem_request > 0:
-        if effective_mem > mem_request * (MEM_UNDER_REQUESTED_THRESHOLD / 100) and effective_mem < mem_request * 2.0:
+        if effective_mem > mem_request * (profile.mem_under_pct / 100) and effective_mem < mem_request * 2.0:
             issues.append("MEM_UNDER_REQUESTED")
             if priority.value > Priority.P2.value:
                 priority = Priority.P2
-        elif effective_mem < mem_request * (MEM_OVER_REQUESTED_THRESHOLD / 100):
+        elif effective_mem < mem_request * (profile.mem_over_pct / 100):
             issues.append("MEM_OVER_REQUESTED")
             if priority.value > Priority.P2.value:
                 priority = Priority.P2
@@ -698,20 +722,24 @@ def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
     rec_cpu_base = cpu_p95 if (has_prometheus and cpu_p95 > 0) else avg_cpu
     rec_mem_base = mem_p95 if (has_prometheus and mem_p95 > 0) else avg_mem
 
-    rec_cpu_req = max(CPU_MIN_RECOMMENDED_M, rec_cpu_base * HEADROOM_MULTIPLIER)
+    rec_cpu_req = max(profile.min_cpu_request_m, rec_cpu_base * profile.cpu_headroom)
 
     # Memory headroom is volatility-aware: a 50%-CV workload sized at
     # P95 × 1.25 will OOM during the next swing. CV is only meaningful in
-    # Prometheus mode; kubectl-only mode uses the default multiplier.
+    # Prometheus mode; kubectl-only mode uses the profile baseline. For
+    # the volatility step-ups we take max(profile, hardcoded floor) so a
+    # tight profile (e.g. mem_headroom=1.10 for batch) still snaps up to
+    # the safe absolute multiplier when CV is high — under-sizing a
+    # leaky workload is the costlier failure mode.
     high_volatility = False
     if has_prometheus and mem_cv >= MEMORY_VOLATILITY_HIGH_THRESHOLD:
-        mem_headroom = HEADROOM_MULTIPLIER_HIGH_VOLATILITY
+        mem_headroom = max(profile.mem_headroom, HEADROOM_MULTIPLIER_HIGH_VOLATILITY)
         high_volatility = True
     elif has_prometheus and mem_cv >= MEMORY_VOLATILITY_LOW_THRESHOLD:
-        mem_headroom = HEADROOM_MULTIPLIER_MID_VOLATILITY
+        mem_headroom = max(profile.mem_headroom, HEADROOM_MULTIPLIER_MID_VOLATILITY)
     else:
-        mem_headroom = HEADROOM_MULTIPLIER
-    rec_mem_req = max(16, rec_mem_base * mem_headroom)
+        mem_headroom = profile.mem_headroom
+    rec_mem_req = max(profile.min_mem_request_mi, rec_mem_base * mem_headroom)
 
     if high_volatility:
         issues.append("HIGH_VOLATILITY")
@@ -771,17 +799,14 @@ def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
                 # Track as a raise so Pattern Groups & namespace rollups
                 # surface the additional capacity needed.
                 cpu_delta_m = -rec_cpu_req
-            elif effective_cpu > cpu_request * (CPU_UNDER_REQUESTED_THRESHOLD / 100):
+            elif effective_cpu > cpu_request * (profile.cpu_under_pct / 100):
                 if rec_cpu_req > cpu_request:
                     recommendations.append(f"Increase CPU request to {format_cpu(rec_cpu_req)}")
                     actions.append(f"Raise CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)}")
                     cpu_delta_m = cpu_request - rec_cpu_req  # negative — needs more
-            elif (
-                effective_cpu < cpu_request * (CPU_OVER_REQUESTED_THRESHOLD / 100)
-                and cpu_request > CPU_REDUCTION_BASELINE_M
-            ):
+            elif effective_cpu < cpu_request * (profile.cpu_over_pct / 100) and cpu_request > CPU_REDUCTION_BASELINE_M:
                 savings = cpu_request - rec_cpu_req
-                if savings >= CPU_REDUCTION_MIN_SAVING_M:
+                if savings >= profile.min_cpu_saving_m:
                     recommendations.append(f"Reduce CPU request to {format_cpu(rec_cpu_req)}")
                     actions.append(
                         f"Reduce CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)} (saves {format_cpu(savings)})"
@@ -793,14 +818,14 @@ def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
                 recommendations.append(f"Set memory request: {format_memory(rec_mem_req)}")
                 actions.append(f"Set memory REQUEST to {format_memory(rec_mem_req)} (currently unset)")
                 mem_delta_mi = -rec_mem_req
-            elif effective_mem > mem_request * (MEM_UNDER_REQUESTED_THRESHOLD / 100):
+            elif effective_mem > mem_request * (profile.mem_under_pct / 100):
                 if rec_mem_req > mem_request:
                     recommendations.append(f"Increase memory request to {format_memory(rec_mem_req)}")
                     actions.append(
                         f"Raise memory REQUEST from {format_memory(mem_request)} → {format_memory(rec_mem_req)}"
                     )
                     mem_delta_mi = mem_request - rec_mem_req  # negative
-            elif effective_mem < mem_request * (MEM_OVER_REQUESTED_THRESHOLD / 100):
+            elif effective_mem < mem_request * (profile.mem_over_pct / 100):
                 # GC runtimes (JVM, Node.js) retain heap pages — `avg_mem` and even
                 # P95 underestimate working set. Never reduce mem request for them.
                 if gc_runtime:
@@ -975,6 +1000,7 @@ def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
         bursty_workload=bursty_workload,
         cpu_delta_m=cpu_delta_m,
         mem_delta_mi=mem_delta_mi,
+        policy_name=profile.name,
     )
 
     # Confidence score (used for downstream gating + report rendering).
@@ -1501,6 +1527,7 @@ def analyze_csv_file(
     generate_graphs: bool = False,
     formats: tuple = ("md",),
     state_dir: str | None = None,
+    profiles_path: str | None = None,
 ) -> dict:
     """Main analysis function.
 
@@ -1516,6 +1543,12 @@ def analyze_csv_file(
             and ``first_seen`` populated. Downstream uploaders can use
             this to suppress noise (e.g. "skip a Slack post if the
             recommendation is unchanged from last week").
+        profiles_path: Optional. Path to a YAML policy file with per-namespace
+            overrides for headroom multipliers, guardrail floors, and
+            efficiency thresholds. See ``k8s_advisor/profiles.py`` for the
+            schema. When omitted, every namespace uses the constants.py
+            defaults — analyzer behavior is byte-identical to before this
+            feature.
 
     Returns a dict mapping each requested format ("md", "json") to its
     output path. Backwards-compatible: if a single-format tuple is passed,
@@ -1550,10 +1583,26 @@ def analyze_csv_file(
     if data_quality_warnings:
         print(f"⚠️  Data-quality warnings: {len(data_quality_warnings)} columns with >10% N/A")
 
+    # Resolve the policy file once, then look up per-namespace overrides
+    # in the analyze loop. Loading is intentionally eager so a malformed
+    # policy file fails before we do any analysis work.
+    if profiles_path:
+        from k8s_advisor.profiles import load_profiles
+
+        profile_set = load_profiles(profiles_path)
+        ns_overrides = sorted(profile_set.namespaces.keys())
+        if ns_overrides:
+            print(f"📋 Loaded profiles: default + overrides for {ns_overrides}")
+        else:
+            print("📋 Loaded profiles: default only")
+    else:
+        profile_set = DEFAULT_PROFILE_SET
+
     # Analyze each workload
     analyses = []
     for row in data:
-        analysis = analyze_workload(row, has_prometheus)
+        ns = row.get("Namespace", "")
+        analysis = analyze_workload(row, has_prometheus, profile=profile_set.for_namespace(ns))
         analyses.append(analysis)
 
     print(f"✅ Analyzed {len(analyses)} workloads")
