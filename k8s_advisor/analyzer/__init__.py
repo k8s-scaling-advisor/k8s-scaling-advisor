@@ -1,17 +1,17 @@
 """Analysis engine for K8s resource optimization."""
 
 from .models import (
-    Priority,
-    ScalingApproach,
-    IssueType,
-    ResourceRecommendation,
     DeploymentAnalysis,
+    IssueType,
+    Priority,
+    ResourceRecommendation,
+    ScalingApproach,
 )
 
 __all__ = [
-    'Priority',
-    'ScalingApproach',
-    'IssueType',
-    'ResourceRecommendation',
-    'DeploymentAnalysis',
+    "DeploymentAnalysis",
+    "IssueType",
+    "Priority",
+    "ResourceRecommendation",
+    "ScalingApproach",
 ]

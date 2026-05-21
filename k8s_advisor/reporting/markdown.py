@@ -1,15 +1,11 @@
 """Markdown report generation."""
 
-from typing import List
 from datetime import datetime
-from ..analyzer.models import Priority, ScalingApproach, DeploymentAnalysis
+
+from ..analyzer.models import DeploymentAnalysis, Priority, ScalingApproach
 
 
-def generate_markdown_report(
-    analyses: List[DeploymentAnalysis],
-    output_path: str,
-    has_prometheus: bool = True
-) -> None:
+def generate_markdown_report(analyses: list[DeploymentAnalysis], output_path: str, has_prometheus: bool = True) -> None:
     """Generate comprehensive markdown report.
 
     Args:
@@ -17,7 +13,7 @@ def generate_markdown_report(
         output_path: Path to write markdown file
         has_prometheus: Whether Prometheus metrics were available
     """
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         _write_header(f, analyses, has_prometheus)
         _write_executive_summary(f, analyses)
         _write_priority_breakdown(f, analyses)
@@ -25,7 +21,8 @@ def generate_markdown_report(
         _write_detailed_recommendations(f, analyses)
         _write_implementation_guide(f)
 
-def _write_header(f, analyses: List[DeploymentAnalysis], has_prometheus: bool):
+
+def _write_header(f, analyses: list[DeploymentAnalysis], has_prometheus: bool):
     """Write report header."""
     f.write("# K8s Scaling Advisor - Analysis Report\n\n")
     f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
@@ -43,7 +40,7 @@ def _write_header(f, analyses: List[DeploymentAnalysis], has_prometheus: bool):
     f.write("---\n\n")
 
 
-def _write_executive_summary(f, analyses: List[DeploymentAnalysis]):
+def _write_executive_summary(f, analyses: list[DeploymentAnalysis]):
     """Write executive summary section."""
     f.write("## Executive Summary\n\n")
 
@@ -52,7 +49,9 @@ def _write_executive_summary(f, analyses: List[DeploymentAnalysis]):
     p2_count = sum(1 for a in analyses if a.priority == Priority.P2)
     p3_count = sum(1 for a in analyses if a.priority == Priority.P3)
 
-    manual_count = sum(1 for a in analyses if a.recommended_resources and a.recommended_resources.requires_manual_action)
+    manual_count = sum(
+        1 for a in analyses if a.recommended_resources and a.recommended_resources.requires_manual_action
+    )
 
     f.write("### Priority Breakdown\n\n")
     if p0_count > 0:
@@ -70,7 +69,7 @@ def _write_executive_summary(f, analyses: List[DeploymentAnalysis]):
     f.write("---\n\n")
 
 
-def _write_priority_breakdown(f, analyses: List[DeploymentAnalysis]):
+def _write_priority_breakdown(f, analyses: list[DeploymentAnalysis]):
     """Write detailed priority breakdown."""
     f.write("## Workloads by Priority\n\n")
 
@@ -130,7 +129,7 @@ def _write_priority_breakdown(f, analyses: List[DeploymentAnalysis]):
             f.write("---\n\n")
 
 
-def _write_scaling_approach_summary(f, analyses: List[DeploymentAnalysis]):
+def _write_scaling_approach_summary(f, analyses: list[DeploymentAnalysis]):
     """Write scaling approach summary."""
     f.write("## Scaling Approach Summary\n\n")
 
@@ -149,7 +148,7 @@ def _write_scaling_approach_summary(f, analyses: List[DeploymentAnalysis]):
     f.write("---\n\n")
 
 
-def _write_detailed_recommendations(f, analyses: List[DeploymentAnalysis]):
+def _write_detailed_recommendations(f, analyses: list[DeploymentAnalysis]):
     """Write detailed recommendations section."""
     f.write("## Detailed Recommendations\n\n")
 
@@ -188,14 +187,14 @@ def _write_implementation_guide(f):
     f.write("3. Stabilize workloads with high restart rates\n\n")
 
     f.write("### Phase 2: Deploy HPA\n\n")
-    f.write("1. Start with \"HPA Ready\" workloads\n")
+    f.write('1. Start with "HPA Ready" workloads\n')
     f.write("2. Monitor for 1-2 weeks\n")
     f.write("3. Fix any issues that arise\n\n")
 
     f.write("### Phase 3: Optimize with VPA\n\n")
-    f.write("1. Deploy VPA in \"Off\" mode for recommendations\n")
+    f.write('1. Deploy VPA in "Off" mode for recommendations\n')
     f.write("2. Review and apply VPA suggestions\n")
-    f.write("3. Consider VPA \"Auto\" mode for single-replica workloads\n\n")
+    f.write('3. Consider VPA "Auto" mode for single-replica workloads\n\n')
 
     f.write("---\n\n")
 

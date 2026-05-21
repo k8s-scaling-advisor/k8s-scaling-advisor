@@ -53,8 +53,8 @@ HEADROOM_MULTIPLIER = 1.25
 # tightly is fine.
 #
 # CV is `Mem_Volatility_CV` in the CSV (collected via Prometheus only).
-HEADROOM_MULTIPLIER_MID_VOLATILITY = 1.5    # 10% <= CV < 20%
-HEADROOM_MULTIPLIER_HIGH_VOLATILITY = 1.8   # CV >= 20%
+HEADROOM_MULTIPLIER_MID_VOLATILITY = 1.5  # 10% <= CV < 20%
+HEADROOM_MULTIPLIER_HIGH_VOLATILITY = 1.8  # CV >= 20%
 
 # Burst headroom for limits (minimum limit/request ratio)
 BURST_HEADROOM_MULTIPLIER = 1.5  # Limits should be ≥1.5x requests
@@ -103,7 +103,7 @@ HPA_TARGET_UTILIZATION_MAX = 80
 # than a misleading number.
 
 # Avg usage at or below this is treated as "no signal" in kubectl-only mode.
-LOW_SIGNAL_CPU_M = 1.0   # millicores
+LOW_SIGNAL_CPU_M = 1.0  # millicores
 LOW_SIGNAL_MEM_MI = 1.0  # MiB
 
 # Restart-aware low-confidence gate.
@@ -127,8 +127,8 @@ LOW_CONFIDENCE_TOTAL_RESTARTS = 50  # absolute fallback (covers no-rate-data cas
 # 40%+ of workloads in P0 and drown the actually-broken ones in noise.
 # Demote to P2 when the workload looks idle and stable: low usage AND no
 # restart history.
-REQUESTS_NOT_SET_P0_CPU_M = 50      # active CPU usage threshold
-REQUESTS_NOT_SET_P0_MEM_MI = 64     # active memory usage threshold
+REQUESTS_NOT_SET_P0_CPU_M = 50  # active CPU usage threshold
+REQUESTS_NOT_SET_P0_MEM_MI = 64  # active memory usage threshold
 
 # Owner attribution.
 #
@@ -136,11 +136,11 @@ REQUESTS_NOT_SET_P0_MEM_MI = 64     # active memory usage threshold
 # non-empty value on a workload. Order matters — earlier keys win.
 # Edit to match your environment's labelling conventions.
 OWNER_LABEL_KEYS = (
-    'app.kubernetes.io/part-of',
-    'owner',
-    'team',
-    'owner-team',
-    'app.kubernetes.io/managed-by',
+    "app.kubernetes.io/part-of",
+    "owner",
+    "team",
+    "owner-team",
+    "app.kubernetes.io/managed-by",
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -154,7 +154,7 @@ OWNER_LABEL_KEYS = (
 # Add a substring here only when the workload class is fundamentally
 # unsuitable for HPA/VPA recommendations.
 EXCLUDED_DEPLOYMENTS = {
-    'logstash',  # JVM + plugin-constrained scaling; resize manually
+    "logstash",  # JVM + plugin-constrained scaling; resize manually
 }
 
 # GC runtimes where memory-based HPA is UNRELIABLE.
@@ -170,23 +170,23 @@ EXCLUDED_DEPLOYMENTS = {
 # Edit this set to match your environment's naming conventions.
 GC_RUNTIME_PATTERNS = {
     # JVM ecosystem
-    'java',
-    'jvm',
-    'logstash',
-    'airflow',
-    'kafka',
-    'zookeeper',
-    'elasticsearch',
-    'opensearch',
-    'cassandra',
-    'spark',
-    'flink',
-    'tomcat',
-    'jetty',
+    "java",
+    "jvm",
+    "logstash",
+    "airflow",
+    "kafka",
+    "zookeeper",
+    "elasticsearch",
+    "opensearch",
+    "cassandra",
+    "spark",
+    "flink",
+    "tomcat",
+    "jetty",
     # Node.js / V8
-    'nodejs',
-    '-node-',
-    'node-server',
+    "nodejs",
+    "-node-",
+    "node-server",
 }
 
 # Bursty workloads where avg/P95 are NOT representative of working set.
@@ -201,20 +201,20 @@ GC_RUNTIME_PATTERNS = {
 # note replaces the numeric recommendation. These also drop off the Top-N
 # Memory Savers leaderboard so they don't become misleading easy wins.
 BURSTY_WORKLOAD_PATTERNS = {
-    'prometheus',
-    'alertmanager',
-    'thanos',
-    'cortex',
-    'mimir',
-    'cassandra',
-    'kafka-broker',
-    'kafka-connect',
-    'elasticsearch',
-    'opensearch',
-    'redis-cluster',
-    'mongodb',
-    'clickhouse',
-    'victoriametrics',
+    "prometheus",
+    "alertmanager",
+    "thanos",
+    "cortex",
+    "mimir",
+    "cassandra",
+    "kafka-broker",
+    "kafka-connect",
+    "elasticsearch",
+    "opensearch",
+    "redis-cluster",
+    "mongodb",
+    "clickhouse",
+    "victoriametrics",
 }
 
 # Memory-based HPA IS appropriate for these patterns.
@@ -225,26 +225,26 @@ BURSTY_WORKLOAD_PATTERNS = {
 # EXAMPLES: Caches, proxies, connection poolers, monitoring agents
 MEMORY_SCALABLE_PATTERNS = {
     # Caches / proxies
-    'redis',
-    'memcached',
-    'varnish',
-    'nginx',
-    'envoy',
-    'haproxy',
+    "redis",
+    "memcached",
+    "varnish",
+    "nginx",
+    "envoy",
+    "haproxy",
     # Non-JVM message queues
-    'rabbitmq',
-    'pulsar',
+    "rabbitmq",
+    "pulsar",
     # DB sidecars (connection poolers)
-    'postgres',
-    'mysql',
+    "postgres",
+    "mysql",
     # Go-based monitoring
-    'telegraf',
-    'prometheus',
-    'alertmanager',
+    "telegraf",
+    "prometheus",
+    "alertmanager",
     # Go tooling
-    'oauth2-proxy',
-    'kube-state-metrics',
-    'metrics-server',
+    "oauth2-proxy",
+    "kube-state-metrics",
+    "metrics-server",
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -252,13 +252,13 @@ MEMORY_SCALABLE_PATTERNS = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 COLOR_SCHEME = {
-    'critical': '#d62728',  # Red
-    'warning': '#ff7f0e',  # Orange
-    'good': '#2ca02c',  # Green
-    'info': '#1f77b4',  # Blue
-    'neutral': '#aec7e8',  # Light blue/grey
-    'highlight': '#ffbb78',  # Yellow
-    'secondary': '#9467bd',  # Purple
+    "critical": "#d62728",  # Red
+    "warning": "#ff7f0e",  # Orange
+    "good": "#2ca02c",  # Green
+    "info": "#1f77b4",  # Blue
+    "neutral": "#aec7e8",  # Light blue/grey
+    "highlight": "#ffbb78",  # Yellow
+    "secondary": "#9467bd",  # Purple
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -269,55 +269,55 @@ COLOR_SCHEME = {
 # This defines the schema for data collection output
 CSV_COLUMNS = [
     # Cluster identification (3 columns)
-    'Cluster',
-    'Namespace',
-    'Workload_Type',  # "Deployment" or "StatefulSet"
-    'Deployment',
+    "Cluster",
+    "Namespace",
+    "Workload_Type",  # "Deployment" or "StatefulSet"
+    "Deployment",
     # Replica information (2 columns)
-    'Replicas',
-    'Pod_Count',
+    "Replicas",
+    "Pod_Count",
     # CPU metrics (10 columns)
-    'Avg_CPU_Usage(m)',
-    'CPU_Request(m)',
-    'CPU_Limit(m)',
-    'CPU_Usage_Pct_Of_Request',
-    'CPU_Usage_Pct_Of_Limit',
-    'CPU_Throttle_Pct',
-    'CPU_P50(m)',
-    'CPU_P95(m)',
-    'CPU_Max(m)',
-    'CPU_StdDev(m)',
+    "Avg_CPU_Usage(m)",
+    "CPU_Request(m)",
+    "CPU_Limit(m)",
+    "CPU_Usage_Pct_Of_Request",
+    "CPU_Usage_Pct_Of_Limit",
+    "CPU_Throttle_Pct",
+    "CPU_P50(m)",
+    "CPU_P95(m)",
+    "CPU_Max(m)",
+    "CPU_StdDev(m)",
     # Memory metrics (10 columns)
-    'Avg_Mem_Usage(Mi)',
-    'Mem_Request(Mi)',
-    'Mem_Limit(Mi)',
-    'Mem_Usage_Pct_Of_Request',
-    'Mem_Usage_Pct_Of_Limit',
-    'Mem_P50(Mi)',
-    'Mem_P95(Mi)',
-    'Mem_Max(Mi)',
-    'Mem_StdDev(Mi)',
-    'Mem_Volatility_CV',  # Coefficient of variation (%)
+    "Avg_Mem_Usage(Mi)",
+    "Mem_Request(Mi)",
+    "Mem_Limit(Mi)",
+    "Mem_Usage_Pct_Of_Request",
+    "Mem_Usage_Pct_Of_Limit",
+    "Mem_P50(Mi)",
+    "Mem_P95(Mi)",
+    "Mem_Max(Mi)",
+    "Mem_StdDev(Mi)",
+    "Mem_Volatility_CV",  # Coefficient of variation (%)
     # Stability metrics (7 columns)
-    'OOMKilled_Count',
-    'LastRestart_Reason',
-    'LastRestart_ExitCode',  # numeric exit code or 'N/A'
-    'Total_Restarts',
-    'Max_Restarts_Per_Pod',
-    'Restart_Rate_Per_Day',
-    'Days_Since_Last_Restart',
+    "OOMKilled_Count",
+    "LastRestart_Reason",
+    "LastRestart_ExitCode",  # numeric exit code or 'N/A'
+    "Total_Restarts",
+    "Max_Restarts_Per_Pod",
+    "Restart_Rate_Per_Day",
+    "Days_Since_Last_Restart",
     # HPA information (3 columns)
-    'Has_HPA',
-    'HPA_Min_Replicas',
-    'HPA_Max_Replicas',
+    "Has_HPA",
+    "HPA_Min_Replicas",
+    "HPA_Max_Replicas",
     # Storage (2 columns)
-    'PVC_Access_Mode',
-    'PVC_Count',
+    "PVC_Access_Mode",
+    "PVC_Count",
     # Container count (1 column)
-    'Container_Count',
+    "Container_Count",
     # Labels and tags (2 columns)
-    'Key_Labels',
-    'Detected_Issues',  # Comma-separated issue flags
+    "Key_Labels",
+    "Detected_Issues",  # Comma-separated issue flags
 ]
 
 # Total: 40 columns (was 39 before LastRestart_ExitCode)

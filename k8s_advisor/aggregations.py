@@ -5,28 +5,39 @@ output of build_render_context() to produce the final markdown.
 """
 
 from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Iterable, List, Sequence
 
 
 @dataclass
 class NamespaceRollup:
+    """Per-namespace aggregate of priority counts and signed CPU/Mem deltas.
+
+    Built by `build_namespace_rollups` and consumed by the markdown
+    template's Namespace Rollup section. The split between savings and
+    raises lets a reader weigh "this namespace gives back capacity" vs
+    "this namespace needs more capacity" without doing arithmetic in
+    their head.
+    """
+
     namespace: str
     workload_count: int = 0
     p0: int = 0
     p1: int = 0
     p2: int = 0
     p3: int = 0
-    cpu_savings_m: float = 0.0   # sum of positive cpu_delta_m
-    cpu_raises_m: float = 0.0    # sum of |negative cpu_delta_m|
+    cpu_savings_m: float = 0.0  # sum of positive cpu_delta_m
+    cpu_raises_m: float = 0.0  # sum of |negative cpu_delta_m|
     mem_savings_mi: float = 0.0
     mem_raises_mi: float = 0.0
     insufficient_data: int = 0
-    owners: List[str] = field(default_factory=list)  # distinct, sorted
+    owners: list[str] = field(default_factory=list)  # distinct, sorted
 
 
 @dataclass
 class TopEntry:
+    """One row of a Top-N leaderboard (CPU savers, Mem savers, Highest Risk)."""
+
     namespace: str
     deployment: str
     workload_type: str
@@ -42,14 +53,15 @@ class PatternGroup:
     rook-ceph-crashcollector-* deployments) — fix the chart once instead of
     filing 38 tickets.
     """
+
     namespace: str
     prefix: str
     priority: str
-    workloads: List[str] = field(default_factory=list)
+    workloads: list[str] = field(default_factory=list)
     cpu_savings_m: float = 0.0
     mem_savings_mi: float = 0.0
-    cpu_raises_m: float = 0.0    # absolute additional CPU needed
-    mem_raises_mi: float = 0.0   # absolute additional memory needed
+    cpu_raises_m: float = 0.0  # absolute additional CPU needed
+    mem_raises_mi: float = 0.0  # absolute additional memory needed
     insufficient_data: int = 0
 
 
@@ -62,9 +74,11 @@ def _name_prefix(name: str) -> str:
     'rook-ceph-crashcollector-node-abc123' → 'rook-ceph-crashcollector'.
     """
     # Split on '-' and rebuild while the trailing parts look generated.
-    parts = name.rsplit('-', 1)
-    if len(parts) == 2 and parts[1] and (
-        parts[1].isalnum() and (any(c.isdigit() for c in parts[1]) or len(parts[1]) >= 6)
+    parts = name.rsplit("-", 1)
+    if (
+        len(parts) == 2
+        and parts[1]
+        and (parts[1].isalnum() and (any(c.isdigit() for c in parts[1]) or len(parts[1]) >= 6))
     ):
         return parts[0]
     return name
@@ -76,7 +90,12 @@ def _priority_int(p) -> int:
     return {"P0": 0, "P1": 1, "P2": 2, "P3": 3}.get(v, 3)
 
 
-def build_namespace_rollups(analyses: Sequence) -> List[NamespaceRollup]:
+def build_namespace_rollups(analyses: Sequence) -> list[NamespaceRollup]:
+    """Group analyses by namespace and aggregate priority counts + deltas.
+
+    Output is sorted by P0 descending, then by total savings descending.
+    Used by the report's Namespace Rollup section.
+    """
     rollups = defaultdict(lambda: NamespaceRollup(namespace=""))
     seen_owners: dict = defaultdict(set)
     for a in analyses:
@@ -127,21 +146,25 @@ def build_top_savers(analyses: Sequence, limit: int = 10) -> dict:
         d_cpu = getattr(a, "cpu_delta_m", 0.0)
         d_mem = getattr(a, "mem_delta_mi", 0.0)
         if d_cpu > 0:
-            cpu.append(TopEntry(
-                namespace=a.namespace,
-                deployment=a.deployment,
-                workload_type=a.workload_type,
-                value=d_cpu,
-                note=f"{int(d_cpu)}m saved",
-            ))
+            cpu.append(
+                TopEntry(
+                    namespace=a.namespace,
+                    deployment=a.deployment,
+                    workload_type=a.workload_type,
+                    value=d_cpu,
+                    note=f"{int(d_cpu)}m saved",
+                )
+            )
         if d_mem > 0:
-            mem.append(TopEntry(
-                namespace=a.namespace,
-                deployment=a.deployment,
-                workload_type=a.workload_type,
-                value=d_mem,
-                note=_format_mi(d_mem) + " saved",
-            ))
+            mem.append(
+                TopEntry(
+                    namespace=a.namespace,
+                    deployment=a.deployment,
+                    workload_type=a.workload_type,
+                    value=d_mem,
+                    note=_format_mi(d_mem) + " saved",
+                )
+            )
         risk_score = (
             (10 if "OOM_KILLED" in a.issues else 0)
             + (5 if "CPU_THROTTLED" in a.issues else 0)
@@ -172,13 +195,15 @@ def build_top_savers(analyses: Sequence, limit: int = 10) -> dict:
             crash_signal = getattr(a, "crash_signal", "")
             if crash_signal and a.total_restarts > 0:
                 note_bits.append(crash_signal)
-            risk.append(TopEntry(
-                namespace=a.namespace,
-                deployment=a.deployment,
-                workload_type=a.workload_type,
-                value=risk_score,
-                note=", ".join(note_bits) or "issue",
-            ))
+            risk.append(
+                TopEntry(
+                    namespace=a.namespace,
+                    deployment=a.deployment,
+                    workload_type=a.workload_type,
+                    value=risk_score,
+                    note=", ".join(note_bits) or "issue",
+                )
+            )
 
     cpu.sort(key=lambda e: -e.value)
     mem.sort(key=lambda e: -e.value)
@@ -191,7 +216,7 @@ def build_top_savers(analyses: Sequence, limit: int = 10) -> dict:
     }
 
 
-def build_pattern_groups(analyses: Sequence, min_size: int = 3) -> List[PatternGroup]:
+def build_pattern_groups(analyses: Sequence, min_size: int = 3) -> list[PatternGroup]:
     """Group workloads sharing (namespace, name-prefix, priority).
 
     Only returns groups of size >= min_size. These are typically Helm-chart
@@ -228,6 +253,7 @@ def build_pattern_groups(analyses: Sequence, min_size: int = 3) -> List[PatternG
 
 
 def _format_mi(mi: float) -> str:
+    """Render a MiB value as a short string (e.g. 768Mi, 2.0Gi)."""
     if mi < 1024:
         return f"{int(mi)}Mi"
     return f"{mi / 1024:.1f}Gi"

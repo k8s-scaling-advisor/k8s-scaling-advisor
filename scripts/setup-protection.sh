@@ -41,6 +41,7 @@ REQUIRED_CHECKS=(
     "tests (3.12)"
     "tests (3.13)"
     "lint"
+    "CodeQL (python)"
 )
 
 # Build the JSON contexts array
@@ -60,9 +61,9 @@ gh api -X PUT "repos/${REPO}/branches/main/protection" \
   "enforce_admins": true,
   "required_pull_request_reviews": {
     "dismiss_stale_reviews": true,
-    "require_code_owner_reviews": true,
-    "required_approving_review_count": 1,
-    "require_last_push_approval": true
+    "require_code_owner_reviews": false,
+    "required_approving_review_count": 0,
+    "require_last_push_approval": false
   },
   "restrictions": null,
   "required_linear_history": true,
@@ -82,9 +83,14 @@ echo "Verify at: https://github.com/${REPO}/settings/branches"
 echo
 echo "What this does:"
 echo "  - Direct pushes to main are blocked (even for admins)"
-echo "  - Every change requires a PR with 1 approving review"
-echo "  - CODEOWNERS approval required for files they own"
+echo "  - Every change requires a PR (review count: 0 — see REPO_SETUP.md)"
 echo "  - All required CI checks must pass before merge"
 echo "  - Linear history enforced (no merge commits via UI)"
 echo "  - Signed commits required"
 echo "  - Force-push and branch deletion disabled"
+echo "  - Conversation resolution required before merge"
+echo
+echo "Solo-maintainer note: required_approving_review_count is 0 because"
+echo "GitHub does not allow self-approval. When a co-maintainer joins,"
+echo "raise it to 1 via Settings -> Branches in the UI, or re-run this"
+echo "script after editing the value above."

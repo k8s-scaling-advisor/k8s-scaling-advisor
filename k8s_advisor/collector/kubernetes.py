@@ -4,14 +4,18 @@ This module uses the kubernetes Python library instead of kubectl commands
 for more robust and efficient data collection.
 """
 
+import sys
+from typing import Optional
+
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from typing import Dict, List, Optional, Tuple
-import sys
 
 
 def load_kube_config() -> bool:
     """Load Kubernetes configuration.
+
+    Tries local kubeconfig first (developer/laptop flow), then falls back to
+    in-cluster ServiceAccount credentials (Pod/CronJob flow).
 
     Returns:
         True if successful, False otherwise
@@ -19,9 +23,13 @@ def load_kube_config() -> bool:
     try:
         config.load_kube_config()
         return True
-    except Exception as e:
-        print(f"Error loading kubeconfig: {e}", file=sys.stderr)
-        return False
+    except Exception:
+        try:
+            config.load_incluster_config()
+            return True
+        except Exception as e:
+            print(f"Error loading kubeconfig/in-cluster config: {e}", file=sys.stderr)
+            return False
 
 
 def get_cluster_name() -> str:
@@ -31,12 +39,12 @@ def get_cluster_name() -> str:
         Cluster name or 'unknown'
     """
     try:
-        contexts, active_context = config.list_kube_config_contexts()
+        _contexts, active_context = config.list_kube_config_contexts()
         if active_context:
-            return active_context['name']
+            return active_context["name"]
     except Exception:
         pass
-    return 'unknown'
+    return "unknown"
 
 
 class NamespaceAccessError(Exception):
@@ -74,7 +82,7 @@ def check_namespace_access(namespace: str) -> bool:
         return True  # optimistic: let the actual call fail with a real error
 
 
-def get_all_namespaces(exclude_system: bool = True) -> List[str]:
+def get_all_namespaces(exclude_system: bool = True) -> list[str]:
     """Get all namespaces in the cluster.
 
     Args:
@@ -94,7 +102,7 @@ def get_all_namespaces(exclude_system: bool = True) -> List[str]:
         ns_list = []
         for ns in namespaces.items:
             name = ns.metadata.name
-            if exclude_system and name.startswith('kube-'):
+            if exclude_system and name.startswith("kube-"):
                 continue
             ns_list.append(name)
 
@@ -112,7 +120,7 @@ def get_all_namespaces(exclude_system: bool = True) -> List[str]:
         return []
 
 
-def get_deployments(namespace: str) -> List[Dict]:
+def get_deployments(namespace: str) -> list[dict]:
     """Get all deployments in a namespace with full details.
 
     Args:
@@ -130,16 +138,18 @@ def get_deployments(namespace: str) -> List[Dict]:
 
         result = []
         for deploy in deployments.items:
-            result.append({
-                'name': deploy.metadata.name,
-                'namespace': namespace,
-                'replicas': deploy.spec.replicas or 0,
-                'ready_replicas': deploy.status.ready_replicas or 0,
-                'labels': deploy.metadata.labels or {},
-                'selector': deploy.spec.selector.match_labels or {},
-                'containers': _extract_container_specs(deploy.spec.template.spec.containers),
-                'volumes': _extract_volume_info(deploy.spec.template.spec.volumes or []),
-            })
+            result.append(
+                {
+                    "name": deploy.metadata.name,
+                    "namespace": namespace,
+                    "replicas": deploy.spec.replicas or 0,
+                    "ready_replicas": deploy.status.ready_replicas or 0,
+                    "labels": deploy.metadata.labels or {},
+                    "selector": deploy.spec.selector.match_labels or {},
+                    "containers": _extract_container_specs(deploy.spec.template.spec.containers),
+                    "volumes": _extract_volume_info(deploy.spec.template.spec.volumes or []),
+                }
+            )
 
         return result
     except ApiException as e:
@@ -152,7 +162,7 @@ def get_deployments(namespace: str) -> List[Dict]:
         return []
 
 
-def get_statefulsets(namespace: str) -> List[Dict]:
+def get_statefulsets(namespace: str) -> list[dict]:
     """Get all statefulsets in a namespace with full details.
 
     Args:
@@ -170,19 +180,19 @@ def get_statefulsets(namespace: str) -> List[Dict]:
 
         result = []
         for sts in statefulsets.items:
-            result.append({
-                'name': sts.metadata.name,
-                'namespace': namespace,
-                'replicas': sts.spec.replicas or 0,
-                'ready_replicas': sts.status.ready_replicas or 0,
-                'labels': sts.metadata.labels or {},
-                'selector': sts.spec.selector.match_labels or {},
-                'containers': _extract_container_specs(sts.spec.template.spec.containers),
-                'volumes': _extract_volume_info(sts.spec.template.spec.volumes or []),
-                'volume_claim_templates': _extract_pvc_templates(
-                    sts.spec.volume_claim_templates or []
-                ),
-            })
+            result.append(
+                {
+                    "name": sts.metadata.name,
+                    "namespace": namespace,
+                    "replicas": sts.spec.replicas or 0,
+                    "ready_replicas": sts.status.ready_replicas or 0,
+                    "labels": sts.metadata.labels or {},
+                    "selector": sts.spec.selector.match_labels or {},
+                    "containers": _extract_container_specs(sts.spec.template.spec.containers),
+                    "volumes": _extract_volume_info(sts.spec.template.spec.volumes or []),
+                    "volume_claim_templates": _extract_pvc_templates(sts.spec.volume_claim_templates or []),
+                }
+            )
 
         return result
     except ApiException as e:
@@ -195,7 +205,7 @@ def get_statefulsets(namespace: str) -> List[Dict]:
         return []
 
 
-def get_pods_for_workload(namespace: str, label_selector: Dict[str, str]) -> List[Dict]:
+def get_pods_for_workload(namespace: str, label_selector: dict[str, str]) -> list[dict]:
     """Get all pods matching a label selector with detailed status.
 
     Args:
@@ -209,7 +219,7 @@ def get_pods_for_workload(namespace: str, label_selector: Dict[str, str]) -> Lis
         v1 = client.CoreV1Api()
 
         # Convert dict to label selector string
-        selector_str = ','.join([f"{k}={v}" for k, v in label_selector.items()])
+        selector_str = ",".join([f"{k}={v}" for k, v in label_selector.items()])
 
         pods = v1.list_namespaced_pod(namespace, label_selector=selector_str)
 
@@ -229,20 +239,24 @@ def get_pods_for_workload(namespace: str, label_selector: Dict[str, str]) -> Lis
                         last_termination_reason = cs.last_state.terminated.reason
                         last_termination_exit_code = cs.last_state.terminated.exit_code
 
-                    container_statuses.append({
-                        'name': cs.name,
-                        'restart_count': restart_count,
-                        'ready': cs.ready,
-                        'last_termination_reason': last_termination_reason,
-                        'last_termination_exit_code': last_termination_exit_code,
-                    })
+                    container_statuses.append(
+                        {
+                            "name": cs.name,
+                            "restart_count": restart_count,
+                            "ready": cs.ready,
+                            "last_termination_reason": last_termination_reason,
+                            "last_termination_exit_code": last_termination_exit_code,
+                        }
+                    )
 
-            result.append({
-                'name': pod.metadata.name,
-                'namespace': namespace,
-                'phase': pod.status.phase,
-                'container_statuses': container_statuses,
-            })
+            result.append(
+                {
+                    "name": pod.metadata.name,
+                    "namespace": namespace,
+                    "phase": pod.status.phase,
+                    "container_statuses": container_statuses,
+                }
+            )
 
         return result
     except Exception as e:
@@ -250,7 +264,7 @@ def get_pods_for_workload(namespace: str, label_selector: Dict[str, str]) -> Lis
         return []
 
 
-def get_pod_metrics(namespace: str, label_selector: Dict[str, str]) -> Dict[str, float]:
+def get_pod_metrics(namespace: str, label_selector: dict[str, str]) -> dict[str, float]:
     """Get aggregated metrics for pods matching label selector.
 
     Uses metrics-server API (kubectl top equivalent).
@@ -268,50 +282,46 @@ def get_pod_metrics(namespace: str, label_selector: Dict[str, str]) -> Dict[str,
         custom_api = CustomObjectsApi()
 
         # Get pod metrics from metrics-server
-        selector_str = ','.join([f"{k}={v}" for k, v in label_selector.items()])
+        selector_str = ",".join([f"{k}={v}" for k, v in label_selector.items()])
 
         metrics = custom_api.list_namespaced_custom_object(
-            group="metrics.k8s.io",
-            version="v1beta1",
-            namespace=namespace,
-            plural="pods",
-            label_selector=selector_str
+            group="metrics.k8s.io", version="v1beta1", namespace=namespace, plural="pods", label_selector=selector_str
         )
 
         total_cpu = 0.0
         total_memory = 0.0
         count = 0
 
-        for pod in metrics.get('items', []):
-            for container in pod.get('containers', []):
+        for pod in metrics.get("items", []):
+            for container in pod.get("containers", []):
                 # Parse CPU (e.g., "123m" or "1.5")
-                cpu_str = container.get('usage', {}).get('cpu', '0')
+                cpu_str = container.get("usage", {}).get("cpu", "0")
                 cpu_value = _parse_cpu(cpu_str)
                 total_cpu += cpu_value
 
                 # Parse memory (e.g., "123Mi" or "1Gi")
-                mem_str = container.get('usage', {}).get('memory', '0')
+                mem_str = container.get("usage", {}).get("memory", "0")
                 mem_value = _parse_memory(mem_str)
                 total_memory += mem_value
 
                 count += 1
 
         if count == 0:
-            return {'avg_cpu_m': 0.0, 'avg_memory_mi': 0.0, 'pod_count': 0}
+            return {"avg_cpu_m": 0.0, "avg_memory_mi": 0.0, "pod_count": 0}
 
         return {
-            'avg_cpu_m': total_cpu / count,
-            'avg_memory_mi': total_memory / count,
-            'pod_count': count,
+            "avg_cpu_m": total_cpu / count,
+            "avg_memory_mi": total_memory / count,
+            "pod_count": count,
         }
 
     except Exception as e:
         # Metrics-server might not be available
         print(f"Warning: Could not get pod metrics: {e}", file=sys.stderr)
-        return {'avg_cpu_m': 0.0, 'avg_memory_mi': 0.0, 'pod_count': 0}
+        return {"avg_cpu_m": 0.0, "avg_memory_mi": 0.0, "pod_count": 0}
 
 
-def get_hpa_for_workload(namespace: str, workload_name: str, workload_kind: str) -> Optional[Dict]:
+def get_hpa_for_workload(namespace: str, workload_name: str, workload_kind: str) -> Optional[dict]:
     """Check if HPA exists for a workload.
 
     Args:
@@ -328,14 +338,13 @@ def get_hpa_for_workload(namespace: str, workload_name: str, workload_kind: str)
 
         for hpa in hpas.items:
             target_ref = hpa.spec.scale_target_ref
-            if (target_ref.name == workload_name and
-                target_ref.kind == workload_kind):
+            if target_ref.name == workload_name and target_ref.kind == workload_kind:
                 return {
-                    'name': hpa.metadata.name,
-                    'min_replicas': hpa.spec.min_replicas or 1,
-                    'max_replicas': hpa.spec.max_replicas,
-                    'current_replicas': hpa.status.current_replicas or 0,
-                    'desired_replicas': hpa.status.desired_replicas or 0,
+                    "name": hpa.metadata.name,
+                    "min_replicas": hpa.spec.min_replicas or 1,
+                    "max_replicas": hpa.spec.max_replicas,
+                    "current_replicas": hpa.status.current_replicas or 0,
+                    "desired_replicas": hpa.status.desired_replicas or 0,
                 }
 
         return None
@@ -344,7 +353,7 @@ def get_hpa_for_workload(namespace: str, workload_name: str, workload_kind: str)
         return None
 
 
-def get_events_for_workload(namespace: str, workload_name: str) -> Dict[str, int]:
+def get_events_for_workload(namespace: str, workload_name: str) -> dict[str, int]:
     """Get event counts for a workload (OOM kills, restarts, etc).
 
     Args:
@@ -367,34 +376,35 @@ def get_events_for_workload(namespace: str, workload_name: str) -> Dict[str, int
             if not event.involved_object.name.startswith(workload_name):
                 continue
 
-            reason = event.reason or ''
-            message = event.message or ''
+            reason = event.reason or ""
+            message = event.message or ""
 
             # Count OOM kills
-            if 'OOMKilled' in reason or 'OOM' in message:
+            if "OOMKilled" in reason or "OOM" in message:
                 oom_kills += 1
 
             # Count warnings and errors
-            if event.type == 'Warning':
+            if event.type == "Warning":
                 warnings += 1
-            elif event.type == 'Error':
+            elif event.type == "Error":
                 errors += 1
 
         return {
-            'oom_kills': oom_kills,
-            'warnings': warnings,
-            'errors': errors,
+            "oom_kills": oom_kills,
+            "warnings": warnings,
+            "errors": errors,
         }
     except Exception as e:
         print(f"Error getting events in {namespace}: {e}", file=sys.stderr)
-        return {'oom_kills': 0, 'warnings': 0, 'errors': 0}
+        return {"oom_kills": 0, "warnings": 0, "errors": 0}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Helper Functions
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _extract_container_specs(containers) -> List[Dict]:
+
+def _extract_container_specs(containers) -> list[dict]:
     """Extract container resource specifications.
 
     Args:
@@ -412,28 +422,30 @@ def _extract_container_specs(containers) -> List[Dict]:
         cpu_request = 0.0
         mem_request = 0.0
         if resources and resources.requests:
-            cpu_request = _parse_cpu(resources.requests.get('cpu', '0'))
-            mem_request = _parse_memory(resources.requests.get('memory', '0'))
+            cpu_request = _parse_cpu(resources.requests.get("cpu", "0"))
+            mem_request = _parse_memory(resources.requests.get("memory", "0"))
 
         # Parse limits
         cpu_limit = 0.0
         mem_limit = 0.0
         if resources and resources.limits:
-            cpu_limit = _parse_cpu(resources.limits.get('cpu', '0'))
-            mem_limit = _parse_memory(resources.limits.get('memory', '0'))
+            cpu_limit = _parse_cpu(resources.limits.get("cpu", "0"))
+            mem_limit = _parse_memory(resources.limits.get("memory", "0"))
 
-        result.append({
-            'name': container.name,
-            'cpu_request_m': cpu_request,
-            'cpu_limit_m': cpu_limit,
-            'mem_request_mi': mem_request,
-            'mem_limit_mi': mem_limit,
-        })
+        result.append(
+            {
+                "name": container.name,
+                "cpu_request_m": cpu_request,
+                "cpu_limit_m": cpu_limit,
+                "mem_request_mi": mem_request,
+                "mem_limit_mi": mem_limit,
+            }
+        )
 
     return result
 
 
-def _extract_volume_info(volumes) -> Dict:
+def _extract_volume_info(volumes) -> dict:
     """Extract volume information (PVC detection).
 
     Args:
@@ -449,12 +461,12 @@ def _extract_volume_info(volumes) -> Dict:
             pvc_names.append(volume.persistent_volume_claim.claim_name)
 
     return {
-        'pvc_count': len(pvc_names),
-        'pvc_names': pvc_names,
+        "pvc_count": len(pvc_names),
+        "pvc_names": pvc_names,
     }
 
 
-def _extract_pvc_templates(templates) -> List[Dict]:
+def _extract_pvc_templates(templates) -> list[dict]:
     """Extract PVC template information from StatefulSet.
 
     Args:
@@ -467,11 +479,13 @@ def _extract_pvc_templates(templates) -> List[Dict]:
 
     for template in templates:
         access_modes = template.spec.access_modes or []
-        result.append({
-            'name': template.metadata.name,
-            'access_modes': access_modes,
-            'has_rwo': 'ReadWriteOnce' in access_modes,
-        })
+        result.append(
+            {
+                "name": template.metadata.name,
+                "access_modes": access_modes,
+                "has_rwo": "ReadWriteOnce" in access_modes,
+            }
+        )
 
     return result
 
@@ -485,21 +499,21 @@ def _parse_cpu(cpu_str: str) -> float:
     Returns:
         CPU value in millicores
     """
-    if not cpu_str or cpu_str == '0':
+    if not cpu_str or cpu_str == "0":
         return 0.0
 
     try:
-        if 'n' in cpu_str:
+        if "n" in cpu_str:
             # Nanoseconds (from metrics-server API)
             # 1 millicore = 1,000,000 nanoseconds
-            return float(cpu_str.replace('n', '')) / 1_000_000
-        elif 'u' in cpu_str:
+            return float(cpu_str.replace("n", "")) / 1_000_000
+        elif "u" in cpu_str:
             # Microseconds
             # 1 millicore = 1,000 microseconds
-            return float(cpu_str.replace('u', '')) / 1_000
-        elif 'm' in cpu_str:
+            return float(cpu_str.replace("u", "")) / 1_000
+        elif "m" in cpu_str:
             # Already in millicores
-            return float(cpu_str.replace('m', ''))
+            return float(cpu_str.replace("m", ""))
         else:
             # In cores, convert to millicores
             return float(cpu_str) * 1000
@@ -516,19 +530,19 @@ def _parse_memory(mem_str: str) -> float:
     Returns:
         Memory value in MiB
     """
-    if not mem_str or mem_str == '0':
+    if not mem_str or mem_str == "0":
         return 0.0
 
     try:
-        if 'Gi' in mem_str:
-            return float(mem_str.replace('Gi', '')) * 1024
-        elif 'Mi' in mem_str:
-            return float(mem_str.replace('Mi', ''))
-        elif 'Ki' in mem_str:
-            return float(mem_str.replace('Ki', '')) / 1024
-        elif 'k' in mem_str.lower():
+        if "Gi" in mem_str:
+            return float(mem_str.replace("Gi", "")) * 1024
+        elif "Mi" in mem_str:
+            return float(mem_str.replace("Mi", ""))
+        elif "Ki" in mem_str:
+            return float(mem_str.replace("Ki", "")) / 1024
+        elif "k" in mem_str.lower():
             # Sometimes "k" instead of "Ki"
-            return float(mem_str.replace('k', '').replace('K', '')) / 1024
+            return float(mem_str.replace("k", "").replace("K", "")) / 1024
         else:
             # Bytes
             return float(mem_str) / (1024 * 1024)
@@ -536,7 +550,7 @@ def _parse_memory(mem_str: str) -> float:
         return 0.0
 
 
-def get_restart_info_for_pods(pods: List[Dict]) -> Dict:
+def get_restart_info_for_pods(pods: list[dict]) -> dict:
     """Aggregate restart information from list of pods.
 
     Args:
@@ -548,15 +562,15 @@ def get_restart_info_for_pods(pods: List[Dict]) -> Dict:
     total_restarts = 0
     max_restarts = 0
     oom_count = 0
-    last_termination_reason = ''
+    last_termination_reason = ""
     last_termination_exit_code = None
     pods_restarting = 0
 
     for pod in pods:
         pod_has_restarts = False
 
-        for container_status in pod.get('container_statuses', []):
-            restarts = container_status.get('restart_count', 0)
+        for container_status in pod.get("container_statuses", []):
+            restarts = container_status.get("restart_count", 0)
             total_restarts += restarts
             max_restarts = max(max_restarts, restarts)
 
@@ -564,32 +578,32 @@ def get_restart_info_for_pods(pods: List[Dict]) -> Dict:
                 pod_has_restarts = True
 
             # Check for OOM kills
-            reason = container_status.get('last_termination_reason', '')
+            reason = container_status.get("last_termination_reason", "")
             if reason:
                 last_termination_reason = reason
                 # Capture the exit code that goes with this reason. Multiple
                 # containers can crash with different codes; we keep the most
                 # recent non-None value (matches the reason we kept above).
-                ec = container_status.get('last_termination_exit_code')
+                ec = container_status.get("last_termination_exit_code")
                 if ec is not None:
                     last_termination_exit_code = ec
-                if 'OOMKilled' in reason:
+                if "OOMKilled" in reason:
                     oom_count += 1
 
         if pod_has_restarts:
             pods_restarting += 1
 
     return {
-        'total_restarts': total_restarts,
-        'max_restarts_per_pod': max_restarts,
-        'oom_killed_count': oom_count,
-        'last_restart_reason': last_termination_reason,
-        'last_restart_exit_code': last_termination_exit_code,
-        'pods_restarting': pods_restarting,
+        "total_restarts": total_restarts,
+        "max_restarts_per_pod": max_restarts,
+        "oom_killed_count": oom_count,
+        "last_restart_reason": last_termination_reason,
+        "last_restart_exit_code": last_termination_exit_code,
+        "pods_restarting": pods_restarting,
     }
 
 
-def check_pvc_access_modes(namespace: str, pvc_names: List[str]) -> Tuple[bool, str]:
+def check_pvc_access_modes(namespace: str, pvc_names: list[str]) -> tuple[bool, str]:
     """Check if any PVCs have ReadWriteOnce access mode.
 
     Args:
@@ -600,7 +614,7 @@ def check_pvc_access_modes(namespace: str, pvc_names: List[str]) -> Tuple[bool, 
         Tuple of (has_rwo, access_mode_string)
     """
     if not pvc_names:
-        return False, 'N/A'
+        return False, "N/A"
 
     try:
         v1 = client.CoreV1Api()
@@ -613,7 +627,7 @@ def check_pvc_access_modes(namespace: str, pvc_names: List[str]) -> Tuple[bool, 
                 pvc = v1.read_namespaced_persistent_volume_claim(pvc_name, namespace)
                 modes = pvc.spec.access_modes or []
 
-                if 'ReadWriteOnce' in modes:
+                if "ReadWriteOnce" in modes:
                     has_rwo = True
 
                 access_modes.update(modes)
@@ -621,10 +635,10 @@ def check_pvc_access_modes(namespace: str, pvc_names: List[str]) -> Tuple[bool, 
                 # PVC might not exist or be accessible
                 continue
 
-        access_mode_str = ','.join(sorted(access_modes)) if access_modes else 'N/A'
+        access_mode_str = ",".join(sorted(access_modes)) if access_modes else "N/A"
 
         return has_rwo, access_mode_str
 
     except Exception as e:
         print(f"Error checking PVCs in {namespace}: {e}", file=sys.stderr)
-        return False, 'N/A'
+        return False, "N/A"

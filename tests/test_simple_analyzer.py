@@ -295,8 +295,8 @@ def test_requests_not_set_idle_stable_is_p2_not_p0():
     row = _base_row()
     row["CPU_Request(m)"] = "0"
     row["Mem_Request(Mi)"] = "0"
-    row["Avg_CPU_Usage(m)"] = "2"          # well under 50m threshold
-    row["Avg_Mem_Usage(Mi)"] = "10"        # well under 64Mi threshold
+    row["Avg_CPU_Usage(m)"] = "2"  # well under 50m threshold
+    row["Avg_Mem_Usage(Mi)"] = "10"  # well under 64Mi threshold
     row["Total_Restarts"] = "0"
     row["Restart_Rate_Per_Day"] = "0"
     row["OOMKilled_Count"] = "0"
@@ -312,7 +312,7 @@ def test_requests_not_set_active_workload_stays_p0():
     row = _base_row()
     row["CPU_Request(m)"] = "0"
     row["Mem_Request(Mi)"] = "0"
-    row["Avg_CPU_Usage(m)"] = "120"        # > 50m → still P0
+    row["Avg_CPU_Usage(m)"] = "120"  # > 50m → still P0
     row["Avg_Mem_Usage(Mi)"] = "200"
 
     analysis = analyze_workload(row, has_prometheus=True)
@@ -388,8 +388,7 @@ def test_bursty_workload_skips_memory_reduction():
     analysis = analyze_workload(row, has_prometheus=True)
 
     assert analysis.bursty_workload is True
-    assert not any("Reduce memory REQUEST" in a
-                   for a in analysis.action_required.split("; "))
+    assert not any("Reduce memory REQUEST" in a for a in analysis.action_required.split("; "))
     assert "bursty workload class" in analysis.action_required
 
 
@@ -439,8 +438,7 @@ def test_unstable_workload_still_gets_oom_limit_raise():
     assert "UNSTABLE" in analysis.issues
     assert "OOM_KILLED" in analysis.issues
     # Limit raise must be present even though request rightsizing is suppressed.
-    assert any("Raise memory LIMIT" in a
-               for a in analysis.action_required.split("; "))
+    assert any("Raise memory LIMIT" in a for a in analysis.action_required.split("; "))
 
 
 def test_pattern_groups_table_shows_raises_column(tmp_path: Path):
@@ -491,8 +489,7 @@ def test_large_pattern_collapses_in_detail_section(tmp_path: Path):
 
     # Only the first instance gets a per-workload heading.
     detail_headings = [
-        line for line in text.splitlines()
-        if line.startswith("#### `rook-ceph/rook-ceph-crashcollector-")
+        line for line in text.splitlines() if line.startswith("#### `rook-ceph/rook-ceph-crashcollector-")
     ]
     assert len(detail_headings) == 1, f"Expected 1 collapsed heading, got {len(detail_headings)}"
     # And there's a collapse note announcing the other 11.
@@ -517,10 +514,7 @@ def test_small_pattern_does_not_collapse(tmp_path: Path):
     generate_report(analyses, str(report_path), has_prometheus=True)
     text = report_path.read_text(encoding="utf-8")
 
-    detail_headings = [
-        line for line in text.splitlines()
-        if line.startswith("#### `demo/app-frontend-pod-")
-    ]
+    detail_headings = [line for line in text.splitlines() if line.startswith("#### `demo/app-frontend-pod-")]
     assert len(detail_headings) == 5
     # No collapse note for small groups (look for the specific "+ N identical
     # instances in `ns` collapsed" marker, not the Pattern Groups header copy).
@@ -612,12 +606,15 @@ def test_low_cv_workload_uses_default_multiplier():
 def test_owner_extracted_from_json_labels():
     """JSON-serialized Key_Labels should round-trip and surface owner."""
     import json
+
     row = _base_row()
-    row["Key_Labels"] = json.dumps({
-        "app": "web-api",
-        "team": "platform-eng",
-        "app.kubernetes.io/managed-by": "Helm",
-    })
+    row["Key_Labels"] = json.dumps(
+        {
+            "app": "web-api",
+            "team": "platform-eng",
+            "app.kubernetes.io/managed-by": "Helm",
+        }
+    )
 
     analysis = analyze_workload(row, has_prometheus=True)
     # 'team' is in OWNER_LABEL_KEYS; 'app.kubernetes.io/part-of' is preferred
@@ -628,11 +625,14 @@ def test_owner_extracted_from_json_labels():
 def test_owner_prefers_part_of_label():
     """The OWNER_LABEL_KEYS allowlist order must matter."""
     import json
+
     row = _base_row()
-    row["Key_Labels"] = json.dumps({
-        "app.kubernetes.io/part-of": "checkout-stack",
-        "team": "platform-eng",  # would otherwise win
-    })
+    row["Key_Labels"] = json.dumps(
+        {
+            "app.kubernetes.io/part-of": "checkout-stack",
+            "team": "platform-eng",  # would otherwise win
+        }
+    )
 
     analysis = analyze_workload(row, has_prometheus=True)
     assert analysis.owner == "checkout-stack"
@@ -649,6 +649,7 @@ def test_owner_backward_compat_with_legacy_csv():
 
 def test_no_owner_when_labels_dont_match_allowlist():
     import json
+
     row = _base_row()
     row["Key_Labels"] = json.dumps({"app": "web-api", "version": "v1"})
 
@@ -696,16 +697,20 @@ def test_data_quality_banner_renders_in_report(tmp_path: Path):
     row["CPU_P95(m)"] = "100"  # keeps has_prometheus=True
     analysis = analyze_workload(row, has_prometheus=True)
 
-    fake_warnings = [{
-        "column": "CPU_Throttle_Pct",
-        "label": "CPU throttling",
-        "na_count": 50,
-        "na_pct": 95.0,
-        "total": 53,
-    }]
+    fake_warnings = [
+        {
+            "column": "CPU_Throttle_Pct",
+            "label": "CPU throttling",
+            "na_count": 50,
+            "na_pct": 95.0,
+            "total": 53,
+        }
+    ]
     report_path = tmp_path / "report.md"
     generate_report(
-        [analysis], str(report_path), has_prometheus=True,
+        [analysis],
+        str(report_path),
+        has_prometheus=True,
         data_quality_warnings=fake_warnings,
     )
     text = report_path.read_text(encoding="utf-8")
@@ -717,22 +722,29 @@ def test_data_quality_banner_renders_in_report(tmp_path: Path):
 def test_crash_signal_oom_137():
     """OOMKilled + exit 137 → standard OOM signal string."""
     from k8s_advisor.simple_analyzer import _crash_signal
-    assert _crash_signal("OOMKilled", "137") == "OOMKilled (exit 137 — SIGKILL — usually OOMKilled or liveness-probe-failed)"
+
+    assert (
+        _crash_signal("OOMKilled", "137")
+        == "OOMKilled (exit 137 — SIGKILL — usually OOMKilled or liveness-probe-failed)"
+    )
 
 
 def test_crash_signal_app_error():
     from k8s_advisor.simple_analyzer import _crash_signal
+
     assert _crash_signal("Error", 1) == "Error (exit 1 — app error / unhandled exception)"
 
 
 def test_crash_signal_unknown_code_passthrough():
     from k8s_advisor.simple_analyzer import _crash_signal
+
     # Codes outside our hint table still surface the number.
     assert _crash_signal("Error", 42) == "Error (exit 42)"
 
 
 def test_crash_signal_no_data_returns_empty():
     from k8s_advisor.simple_analyzer import _crash_signal
+
     assert _crash_signal("", None) == ""
     assert _crash_signal(None, None) == ""
     assert _crash_signal("", "N/A") == ""
@@ -740,6 +752,7 @@ def test_crash_signal_no_data_returns_empty():
 
 def test_crash_signal_reason_only():
     from k8s_advisor.simple_analyzer import _crash_signal
+
     # Reason without exit code is still useful (older CSVs).
     assert _crash_signal("Error", None) == "Error"
 
@@ -747,6 +760,7 @@ def test_crash_signal_reason_only():
 def test_crash_signal_exit_code_only():
     """Exit code without a reason still surfaces the hint."""
     from k8s_advisor.simple_analyzer import _crash_signal
+
     assert _crash_signal("", "143") == "unknown (exit 143 — SIGTERM — graceful shutdown)"
 
 

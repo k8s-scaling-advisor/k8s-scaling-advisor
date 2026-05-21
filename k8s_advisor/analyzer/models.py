@@ -1,8 +1,8 @@
 """Data models for deployment analysis and recommendations."""
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Optional
 
 
 class Priority(Enum):
@@ -13,6 +13,7 @@ class Priority(Enum):
     P2: Medium - fix during Phase 2-3 (under-requested, over-requested, RWO PVCs)
     P3: Low - optimize after rollout (minor inefficiencies)
     """
+
     P0 = "P0"
     P1 = "P1"
     P2 = "P2"
@@ -28,6 +29,7 @@ class ScalingApproach(Enum):
     NONE: No scaling recommendations (excluded workload)
     HPA_AFTER_FIX: HPA after fixing P0/stability issues
     """
+
     HPA = "HPA"
     VPA = "VPA"
     MANUAL = "MANUAL"
@@ -40,6 +42,7 @@ class IssueType(Enum):
 
     These issue flags drive priority classification and scaling decisions.
     """
+
     REQUESTS_NOT_SET = "REQUESTS_NOT_SET"  # P0: Missing resource requests
     CPU_THROTTLED = "CPU_THROTTLED"  # P0: CPU throttling detected
     RWO_PVC = "RWO_PVC"  # P2: ReadWriteOnce PVC (HPA conflict)
@@ -68,6 +71,7 @@ class ResourceRecommendation:
         rationale: Human-readable explanation of recommendations
         requires_manual_action: Flag for immediate manual resource updates
     """
+
     cpu_request: Optional[str] = None
     cpu_limit: Optional[str] = None
     memory_request: Optional[str] = None
@@ -89,6 +93,7 @@ class DeploymentAnalysis:
 
     Fields with defaults (at the end) are optional Prometheus metrics.
     """
+
     # ─────────────────────────────────────────────────────────────────────────
     # Workload identification (required)
     # ─────────────────────────────────────────────────────────────────────────
@@ -152,7 +157,7 @@ class DeploymentAnalysis:
     # ─────────────────────────────────────────────────────────────────────────
     # Analysis outputs (populated by analyzer)
     # ─────────────────────────────────────────────────────────────────────────
-    issues: List[IssueType] = field(default_factory=list)
+    issues: list[IssueType] = field(default_factory=list)
     scaling_approach: ScalingApproach = ScalingApproach.MANUAL
     recommended_resources: Optional[ResourceRecommendation] = None
     action_required: str = ""
@@ -171,25 +176,25 @@ class DeploymentAnalysis:
     # ─────────────────────────────────────────────────────────────────────────
     rollout_phase: str = ""  # Phase 1, 2, or 3
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization.
 
         Enums are converted to their string values for JSON compatibility.
         """
         d = asdict(self)
-        d['priority'] = self.priority.value
-        d['issues'] = [issue.value for issue in self.issues]
-        d['scaling_approach'] = self.scaling_approach.value
+        d["priority"] = self.priority.value
+        d["issues"] = [issue.value for issue in self.issues]
+        d["scaling_approach"] = self.scaling_approach.value
         return d
 
     @property
     def has_prometheus_metrics(self) -> bool:
         """Check if Prometheus metrics are available (not just defaults)."""
         return (
-            self.cpu_p95_m > 0.0 or
-            self.mem_p95_mi > 0.0 or
-            self.restart_rate_per_day > 0.0 or
-            self.mem_volatility != "N/A"
+            self.cpu_p95_m > 0.0
+            or self.mem_p95_mi > 0.0
+            or self.restart_rate_per_day > 0.0
+            or self.mem_volatility != "N/A"
         )
 
     @property

@@ -7,41 +7,41 @@ Works with namespace-scoped permissions (no cluster-admin required).
 
 import csv
 import sys
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Optional
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import Optional
 
 # Import constants
 try:
     from k8s_advisor.constants import (
-        CPU_OVER_REQUESTED_THRESHOLD,
-        CPU_UNDER_REQUESTED_THRESHOLD,
-        MEM_OVER_REQUESTED_THRESHOLD,
-        MEM_UNDER_REQUESTED_THRESHOLD,
-        UNSTABLE_RESTART_THRESHOLD,
-        UNSTABLE_RESTART_RATE_THRESHOLD,
-        MEM_SATURATION_LIMIT_THRESHOLD,
-        HEADROOM_MULTIPLIER,
+        BURSTY_WORKLOAD_PATTERNS,
         CPU_MIN_RECOMMENDED_M,
+        CPU_OVER_REQUESTED_THRESHOLD,
         CPU_REDUCTION_BASELINE_M,
         CPU_REDUCTION_MIN_SAVING_M,
-        MEMORY_VOLATILITY_LOW_THRESHOLD,
-        MEMORY_VOLATILITY_HIGH_THRESHOLD,
-        HEADROOM_MULTIPLIER_MID_VOLATILITY,
+        CPU_UNDER_REQUESTED_THRESHOLD,
+        GC_RUNTIME_PATTERNS,
+        HEADROOM_MULTIPLIER,
         HEADROOM_MULTIPLIER_HIGH_VOLATILITY,
+        HEADROOM_MULTIPLIER_MID_VOLATILITY,
         HPA_TARGET_UTILIZATION_DEFAULT,
+        LOW_CONFIDENCE_MAX_RESTARTS_PER_POD,
+        LOW_CONFIDENCE_RESTART_RATE_PER_DAY,
+        LOW_CONFIDENCE_TOTAL_RESTARTS,
         LOW_SIGNAL_CPU_M,
         LOW_SIGNAL_MEM_MI,
-        LOW_CONFIDENCE_RESTART_RATE_PER_DAY,
-        LOW_CONFIDENCE_MAX_RESTARTS_PER_POD,
-        LOW_CONFIDENCE_TOTAL_RESTARTS,
+        MEM_OVER_REQUESTED_THRESHOLD,
+        MEM_SATURATION_LIMIT_THRESHOLD,
+        MEM_UNDER_REQUESTED_THRESHOLD,
+        MEMORY_VOLATILITY_HIGH_THRESHOLD,
+        MEMORY_VOLATILITY_LOW_THRESHOLD,
+        OWNER_LABEL_KEYS,
         REQUESTS_NOT_SET_P0_CPU_M,
         REQUESTS_NOT_SET_P0_MEM_MI,
-        OWNER_LABEL_KEYS,
-        GC_RUNTIME_PATTERNS,
-        BURSTY_WORKLOAD_PATTERNS,
+        UNSTABLE_RESTART_RATE_THRESHOLD,
+        UNSTABLE_RESTART_THRESHOLD,
     )
 except ImportError:
     # Fallback if constants not available
@@ -69,14 +69,19 @@ except ImportError:
     REQUESTS_NOT_SET_P0_CPU_M = 50
     REQUESTS_NOT_SET_P0_MEM_MI = 64
     OWNER_LABEL_KEYS = (
-        'app.kubernetes.io/part-of', 'owner', 'team', 'owner-team',
-        'app.kubernetes.io/managed-by',
+        "app.kubernetes.io/part-of",
+        "owner",
+        "team",
+        "owner-team",
+        "app.kubernetes.io/managed-by",
     )
     GC_RUNTIME_PATTERNS = set()
     BURSTY_WORKLOAD_PATTERNS = set()
 
 
 class Priority(Enum):
+    """Workload priority bucket. P0 = act now, P3 = no action needed."""
+
     P0 = "P0"  # Blockers
     P1 = "P1"  # High
     P2 = "P2"  # Medium
@@ -84,6 +89,12 @@ class Priority(Enum):
 
 
 class ScalingApproach(Enum):
+    """Recommended autoscaling strategy for a workload.
+
+    HPA / VPA / MANUAL / NONE / HPA_AFTER_FIX (HPA candidate but blocked
+    on a P0 issue or instability that must be fixed first).
+    """
+
     HPA = "HPA"
     VPA = "VPA"
     MANUAL = "MANUAL"
@@ -94,40 +105,41 @@ class ScalingApproach(Enum):
 @dataclass
 class WorkloadAnalysis:
     """Analysis result for a single workload with comprehensive Prometheus metrics."""
+
     namespace: str
     deployment: str
     workload_type: str
     cluster: str
     priority: Priority
     scaling_approach: ScalingApproach
-    issues: List[str]
-    recommendations: List[str]
+    issues: list[str]
+    recommendations: list[str]
     current_cpu: str
     current_mem: str
     recommended_cpu: str
     recommended_mem: str
     rationale: str = ""
     action_required: str = ""
-    
+
     # Prometheus metrics for rich analysis
     cpu_p50: float = 0.0
     cpu_p95: float = 0.0
     cpu_max: float = 0.0
     cpu_stddev: float = 0.0
     cpu_throttle_pct: float = 0.0
-    
+
     mem_p50: float = 0.0
     mem_p95: float = 0.0
     mem_max: float = 0.0
     mem_stddev: float = 0.0
     mem_volatility_cv: float = 0.0
-    
+
     replicas: int = 1
     oom_kills: int = 0
     total_restarts: int = 0
     restart_rate: float = 0.0
     max_restarts_per_pod: int = 0
-    
+
     # Calculated values
     avg_cpu: float = 0.0
     avg_mem: float = 0.0
@@ -135,7 +147,7 @@ class WorkloadAnalysis:
     cpu_limit: float = 0.0
     mem_request: float = 0.0
     mem_limit: float = 0.0
-    
+
     requires_manual_action: bool = False
 
     pod_count: int = 0
@@ -161,7 +173,7 @@ class WorkloadAnalysis:
 
 def safe_float(value, default=0.0):
     """Safely convert to float."""
-    if not value or value in ('N/A', '', '-'):
+    if not value or value in ("N/A", "", "-"):
         return default
     try:
         return float(value)
@@ -171,7 +183,7 @@ def safe_float(value, default=0.0):
 
 def safe_int(value, default=0):
     """Safely convert to int."""
-    if not value or value in ('N/A', '', '-'):
+    if not value or value in ("N/A", "", "-"):
         return default
     try:
         return int(float(value))
@@ -182,64 +194,66 @@ def safe_int(value, default=0):
 def build_rationale(analysis: WorkloadAnalysis, has_prometheus: bool) -> str:
     """Build comprehensive rationale explaining recommendations using Prometheus data."""
     parts = []
-    
+
     # P0 Issues
     if "REQUESTS_NOT_SET" in analysis.issues:
         parts.append("Resource requests not set - HPA cannot function, scheduler impact")
-    
+
     if "OOM_KILLED" in analysis.issues:
         parts.append(f"Confirmed OOM kills ({analysis.oom_kills}x) - increase limits immediately")
-    
+
     if "CPU_THROTTLED" in analysis.issues and has_prometheus:
         parts.append(f"Active CPU throttling ({analysis.cpu_throttle_pct:.1f}%) - causing latency")
-    
+
     # P1 Issues
     if "UNSTABLE" in analysis.issues:
         # Pick the signal that actually triggered the flag — never claim
         # "0 restarts" when something else (rate, max-per-pod) tripped it.
         if analysis.total_restarts > 0:
-            parts.append(
-                f"Unstable ({analysis.total_restarts} restarts) - fix before HPA"
-            )
+            parts.append(f"Unstable ({analysis.total_restarts} restarts) - fix before HPA")
         elif analysis.restart_rate > 0:
-            parts.append(
-                f"Unstable ({analysis.restart_rate:.1f}/day restart rate) - fix before HPA"
-            )
+            parts.append(f"Unstable ({analysis.restart_rate:.1f}/day restart rate) - fix before HPA")
         elif analysis.max_restarts_per_pod > 0:
-            parts.append(
-                f"Unstable ({analysis.max_restarts_per_pod} restarts on a single pod) - fix before HPA"
-            )
+            parts.append(f"Unstable ({analysis.max_restarts_per_pod} restarts on a single pod) - fix before HPA")
         else:
             parts.append("Unstable workload signal - fix before HPA")
-    
+
     if "MEM_SATURATION" in analysis.issues:
         parts.append("High memory saturation - approaching OOM")
-    
+
     # Resource efficiency with Prometheus context
     if "CPU_OVER_REQUESTED" in analysis.issues:
         if has_prometheus and analysis.cpu_p95 > 0:
-            parts.append(f"CPU over-requested (avg: {analysis.avg_cpu:.0f}m, P95: {analysis.cpu_p95:.0f}m, request: {analysis.cpu_request:.0f}m)")
+            parts.append(
+                f"CPU over-requested (avg: {analysis.avg_cpu:.0f}m, P95: {analysis.cpu_p95:.0f}m, request: {analysis.cpu_request:.0f}m)"
+            )
         else:
-            parts.append(f"CPU over-requested ({(analysis.avg_cpu/analysis.cpu_request*100):.0f}% usage)")
-            
+            parts.append(f"CPU over-requested ({(analysis.avg_cpu / analysis.cpu_request * 100):.0f}% usage)")
+
     if "CPU_UNDER_REQUESTED" in analysis.issues:
         if has_prometheus and analysis.cpu_p95 > 0:
-            parts.append(f"CPU under-requested (avg: {analysis.avg_cpu:.0f}m, P95: {analysis.cpu_p95:.0f}m, request: {analysis.cpu_request:.0f}m)")
+            parts.append(
+                f"CPU under-requested (avg: {analysis.avg_cpu:.0f}m, P95: {analysis.cpu_p95:.0f}m, request: {analysis.cpu_request:.0f}m)"
+            )
         else:
-            parts.append(f"CPU under-requested ({(analysis.avg_cpu/analysis.cpu_request*100):.0f}% usage)")
-    
+            parts.append(f"CPU under-requested ({(analysis.avg_cpu / analysis.cpu_request * 100):.0f}% usage)")
+
     if "MEM_OVER_REQUESTED" in analysis.issues:
         if has_prometheus and analysis.mem_p95 > 0:
-            parts.append(f"Memory over-requested (avg: {analysis.avg_mem:.0f}Mi, P95: {analysis.mem_p95:.0f}Mi, request: {analysis.mem_request:.0f}Mi)")
+            parts.append(
+                f"Memory over-requested (avg: {analysis.avg_mem:.0f}Mi, P95: {analysis.mem_p95:.0f}Mi, request: {analysis.mem_request:.0f}Mi)"
+            )
         else:
-            parts.append(f"Memory over-requested ({(analysis.avg_mem/analysis.mem_request*100):.0f}% usage)")
-            
+            parts.append(f"Memory over-requested ({(analysis.avg_mem / analysis.mem_request * 100):.0f}% usage)")
+
     if "MEM_UNDER_REQUESTED" in analysis.issues:
         if has_prometheus and analysis.mem_p95 > 0:
-            parts.append(f"Memory under-requested (avg: {analysis.avg_mem:.0f}Mi, P95: {analysis.mem_p95:.0f}Mi, request: {analysis.mem_request:.0f}Mi)")
+            parts.append(
+                f"Memory under-requested (avg: {analysis.avg_mem:.0f}Mi, P95: {analysis.mem_p95:.0f}Mi, request: {analysis.mem_request:.0f}Mi)"
+            )
         else:
-            parts.append(f"Memory under-requested ({(analysis.avg_mem/analysis.mem_request*100):.0f}% usage)")
-    
+            parts.append(f"Memory under-requested ({(analysis.avg_mem / analysis.mem_request * 100):.0f}% usage)")
+
     # Scaling approach context
     if analysis.scaling_approach == ScalingApproach.HPA:
         parts.append("Good HPA candidate - multi-replica, variable load")
@@ -250,7 +264,7 @@ def build_rationale(analysis: WorkloadAnalysis, has_prometheus: bool) -> str:
             parts.append("VPA recommended - single replica or stable load")
     elif analysis.scaling_approach == ScalingApproach.HPA_AFTER_FIX:
         parts.append("HPA candidate after resolving blockers")
-    
+
     # Memory volatility insights (Prometheus only)
     if has_prometheus and analysis.mem_volatility_cv > 0:
         if analysis.mem_volatility_cv > MEMORY_VOLATILITY_HIGH_THRESHOLD:
@@ -259,15 +273,15 @@ def build_rationale(analysis: WorkloadAnalysis, has_prometheus: bool) -> str:
             parts.append(f"Moderate memory volatility (CV={analysis.mem_volatility_cv:.1f}%)")
         else:
             parts.append(f"Memory stable (CV={analysis.mem_volatility_cv:.1f}%) - confirms CPU-based HPA")
-    
+
     # RWO PVC
     if "RWO_PVC" in analysis.issues:
         parts.append("RWO PVCs prevent horizontal scaling - VPA only")
-    
+
     return "; ".join(parts) if parts else "No significant issues detected"
 
 
-def _parse_labels(key_labels_field: str) -> Dict[str, str]:
+def _parse_labels(key_labels_field: str) -> dict[str, str]:
     """Parse the Key_Labels CSV column into a {key: value} dict.
 
     Supports both the new JSON-serialized format ({"team":"foo"}) and the
@@ -280,7 +294,7 @@ def _parse_labels(key_labels_field: str) -> Dict[str, str]:
     if not key_labels_field:
         return {}
     s = key_labels_field.strip()
-    if s.startswith('{') and s.endswith('}'):
+    if s.startswith("{") and s.endswith("}"):
         try:
             parsed = _json.loads(s)
             if isinstance(parsed, dict):
@@ -288,17 +302,17 @@ def _parse_labels(key_labels_field: str) -> Dict[str, str]:
         except (ValueError, TypeError):
             pass
     # Legacy: a=b,c=d
-    out: Dict[str, str] = {}
-    for chunk in s.split(','):
-        if '=' in chunk:
-            k, _, v = chunk.partition('=')
+    out: dict[str, str] = {}
+    for chunk in s.split(","):
+        if "=" in chunk:
+            k, _, v = chunk.partition("=")
             k = k.strip()
             if k:
                 out[k] = v.strip()
     return out
 
 
-def _extract_owner(labels: Dict[str, str]) -> str:
+def _extract_owner(labels: dict[str, str]) -> str:
     """Pick the first non-empty value from the OWNER_LABEL_KEYS allowlist."""
     for key in OWNER_LABEL_KEYS:
         val = labels.get(key)
@@ -313,18 +327,18 @@ def _extract_owner(labels: Dict[str, str]) -> str:
 #   - Docker/runc: 125, 126, 127 are container start failures
 #   - General: 0 clean, 1/2 app error
 _EXIT_CODE_HINTS = {
-    0: 'clean exit',
-    1: 'app error / unhandled exception',
-    2: 'app error',
-    125: 'container failed to start (image / runtime error)',
-    126: 'container command not executable',
-    127: 'container command not found',
-    130: 'SIGINT (Ctrl+C)',
-    134: 'SIGABRT — assertion failure / abort()',
-    137: 'SIGKILL — usually OOMKilled or liveness-probe-failed',
-    139: 'SIGSEGV — segfault / native crash',
-    143: 'SIGTERM — graceful shutdown',
-    255: 'fatal exit / unhandled panic',
+    0: "clean exit",
+    1: "app error / unhandled exception",
+    2: "app error",
+    125: "container failed to start (image / runtime error)",
+    126: "container command not executable",
+    127: "container command not found",
+    130: "SIGINT (Ctrl+C)",
+    134: "SIGABRT — assertion failure / abort()",
+    137: "SIGKILL — usually OOMKilled or liveness-probe-failed",
+    139: "SIGSEGV — segfault / native crash",
+    143: "SIGTERM — graceful shutdown",
+    255: "fatal exit / unhandled panic",
 }
 
 
@@ -338,9 +352,9 @@ def _crash_signal(reason: str, exit_code) -> str:
       reason='Completed', exit_code=0   → 'Completed (exit 0 — clean exit)'
       reason='', exit_code=None         → ''
     """
-    reason = (reason or '').strip()
+    reason = (reason or "").strip()
     # Normalize exit_code (CSV stores 'N/A' or stringified int).
-    if exit_code in (None, '', 'N/A'):
+    if exit_code in (None, "", "N/A"):
         ec_int = None
     else:
         try:
@@ -349,16 +363,16 @@ def _crash_signal(reason: str, exit_code) -> str:
             ec_int = None
 
     if not reason and ec_int is None:
-        return ''
+        return ""
     if not reason:
-        reason = 'unknown'
+        reason = "unknown"
 
     if ec_int is None:
         return reason
     hint = _EXIT_CODE_HINTS.get(ec_int)
     if hint:
-        return f'{reason} (exit {ec_int} — {hint})'
-    return f'{reason} (exit {ec_int})'
+        return f"{reason} (exit {ec_int} — {hint})"
+    return f"{reason} (exit {ec_int})"
 
 
 def _is_gc_runtime(deployment: str, key_labels: str) -> bool:
@@ -384,8 +398,7 @@ def _is_bursty_workload(deployment: str, key_labels: str) -> bool:
     return any(pattern.lower() in haystack for pattern in BURSTY_WORKLOAD_PATTERNS)
 
 
-def _is_restart_zombie(restart_rate: float, max_restarts_per_pod: int,
-                       total_restarts: int) -> bool:
+def _is_restart_zombie(restart_rate: float, max_restarts_per_pod: int, total_restarts: int) -> bool:
     """Detect workloads in CrashLoop / restart-leak state.
 
     These pods produce misleading metrics — a service crashing every 30s
@@ -401,8 +414,7 @@ def _is_restart_zombie(restart_rate: float, max_restarts_per_pod: int,
     )
 
 
-def _has_signal(avg_cpu: float, avg_mem: float,
-                pod_count: int, total_restarts: int) -> bool:
+def _has_signal(avg_cpu: float, avg_mem: float, pod_count: int, total_restarts: int) -> bool:
     """Conservative signal check for kubectl-only mode.
 
     Returns False (no signal) when:
@@ -418,8 +430,7 @@ def _has_signal(avg_cpu: float, avg_mem: float,
     return not (no_usage and looks_dead)
 
 
-def _has_prometheus_signal(avg_cpu: float, avg_mem: float,
-                           cpu_p95: float, mem_p95: float) -> bool:
+def _has_prometheus_signal(avg_cpu: float, avg_mem: float, cpu_p95: float, mem_p95: float) -> bool:
     """Signal check for Prometheus mode.
 
     Catches workloads that returned `avg=0` AND empty P95 columns —
@@ -430,57 +441,57 @@ def _has_prometheus_signal(avg_cpu: float, avg_mem: float,
     Returns False (no signal) when both avg metrics are at-or-below the
     LOW_SIGNAL floor AND both P95 columns are also zero/missing.
     """
-    no_avg = (avg_cpu <= LOW_SIGNAL_CPU_M and avg_mem <= LOW_SIGNAL_MEM_MI)
-    no_p95 = (cpu_p95 <= 0 and mem_p95 <= 0)
+    no_avg = avg_cpu <= LOW_SIGNAL_CPU_M and avg_mem <= LOW_SIGNAL_MEM_MI
+    no_p95 = cpu_p95 <= 0 and mem_p95 <= 0
     return not (no_avg and no_p95)
 
 
-def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
+def analyze_workload(row: dict, has_prometheus: bool) -> WorkloadAnalysis:
     """Analyze a single workload from CSV row with comprehensive Prometheus metrics."""
-    
+
     # Parse basic data
-    namespace = row.get('Namespace', '')
-    deployment = row.get('Deployment', '')
-    workload_type = row.get('Workload_Type', 'Deployment')
-    cluster = row.get('Cluster', '')
-    
+    namespace = row.get("Namespace", "")
+    deployment = row.get("Deployment", "")
+    workload_type = row.get("Workload_Type", "Deployment")
+    cluster = row.get("Cluster", "")
+
     # Parse metrics
-    avg_cpu = safe_float(row.get('Avg_CPU_Usage(m)', 0))
-    cpu_request = safe_float(row.get('CPU_Request(m)', 0))
-    cpu_limit = safe_float(row.get('CPU_Limit(m)', 0))
-    
-    avg_mem = safe_float(row.get('Avg_Mem_Usage(Mi)', 0))
-    mem_request = safe_float(row.get('Mem_Request(Mi)', 0))
-    mem_limit = safe_float(row.get('Mem_Limit(Mi)', 0))
-    
+    avg_cpu = safe_float(row.get("Avg_CPU_Usage(m)", 0))
+    cpu_request = safe_float(row.get("CPU_Request(m)", 0))
+    cpu_limit = safe_float(row.get("CPU_Limit(m)", 0))
+
+    avg_mem = safe_float(row.get("Avg_Mem_Usage(Mi)", 0))
+    mem_request = safe_float(row.get("Mem_Request(Mi)", 0))
+    mem_limit = safe_float(row.get("Mem_Limit(Mi)", 0))
+
     # Parse Prometheus metrics
-    cpu_p50 = safe_float(row.get('CPU_P50(m)', 0))
-    cpu_p95 = safe_float(row.get('CPU_P95(m)', 0))
-    cpu_max = safe_float(row.get('CPU_Max(m)', 0))
-    cpu_stddev = safe_float(row.get('CPU_StdDev(m)', 0))
-    cpu_throttle = safe_float(row.get('CPU_Throttle_Pct', 0))
-    
-    mem_p50 = safe_float(row.get('Mem_P50(Mi)', 0))
-    mem_p95 = safe_float(row.get('Mem_P95(Mi)', 0))
-    mem_max = safe_float(row.get('Mem_Max(Mi)', 0))
-    mem_stddev = safe_float(row.get('Mem_StdDev(Mi)', 0))
-    mem_cv = safe_float(row.get('Mem_Volatility_CV', 0))
-    
-    oom_kills = safe_int(row.get('OOMKilled_Count', 0))
-    total_restarts = safe_int(row.get('Total_Restarts', 0))
-    restart_rate = safe_float(row.get('Restart_Rate_Per_Day', 0))
-    max_restarts_per_pod = safe_int(row.get('Max_Restarts_Per_Pod', 0))
-    
-    replicas = safe_int(row.get('Replicas', 1))
-    pod_count = safe_int(row.get('Pod_Count', 0))
-    last_restart_reason = (row.get('LastRestart_Reason') or '').strip()
-    last_restart_exit_code = (row.get('LastRestart_ExitCode') or '').strip()
+    cpu_p50 = safe_float(row.get("CPU_P50(m)", 0))
+    cpu_p95 = safe_float(row.get("CPU_P95(m)", 0))
+    cpu_max = safe_float(row.get("CPU_Max(m)", 0))
+    cpu_stddev = safe_float(row.get("CPU_StdDev(m)", 0))
+    cpu_throttle = safe_float(row.get("CPU_Throttle_Pct", 0))
+
+    mem_p50 = safe_float(row.get("Mem_P50(Mi)", 0))
+    mem_p95 = safe_float(row.get("Mem_P95(Mi)", 0))
+    mem_max = safe_float(row.get("Mem_Max(Mi)", 0))
+    mem_stddev = safe_float(row.get("Mem_StdDev(Mi)", 0))
+    mem_cv = safe_float(row.get("Mem_Volatility_CV", 0))
+
+    oom_kills = safe_int(row.get("OOMKilled_Count", 0))
+    total_restarts = safe_int(row.get("Total_Restarts", 0))
+    restart_rate = safe_float(row.get("Restart_Rate_Per_Day", 0))
+    max_restarts_per_pod = safe_int(row.get("Max_Restarts_Per_Pod", 0))
+
+    replicas = safe_int(row.get("Replicas", 1))
+    pod_count = safe_int(row.get("Pod_Count", 0))
+    last_restart_reason = (row.get("LastRestart_Reason") or "").strip()
+    last_restart_exit_code = (row.get("LastRestart_ExitCode") or "").strip()
     crash_signal = _crash_signal(last_restart_reason, last_restart_exit_code)
-    key_labels = row.get('Key_Labels', '') or ''
+    key_labels = row.get("Key_Labels", "") or ""
     parsed_labels = _parse_labels(key_labels)
     owner = _extract_owner(parsed_labels)
-    pvc_mode = row.get('PVC_Access_Mode', '')
-    is_statefulset = workload_type == 'StatefulSet'
+    pvc_mode = row.get("PVC_Access_Mode", "")
+    is_statefulset = workload_type == "StatefulSet"
 
     # Confidence flags.
     #   - dead_pod_signal:    kubectl-only run + zero usage + dead/idle pod
@@ -489,14 +500,8 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
     #   - restart_zombie:     high restart count regardless of mode
     #                         (Prometheus can't see through CrashLoop either;
     #                         metrics are misleading)
-    dead_pod_signal = (
-        not has_prometheus
-        and not _has_signal(avg_cpu, avg_mem, pod_count, total_restarts)
-    )
-    prom_zero_signal = (
-        has_prometheus
-        and not _has_prometheus_signal(avg_cpu, avg_mem, cpu_p95, mem_p95)
-    )
+    dead_pod_signal = not has_prometheus and not _has_signal(avg_cpu, avg_mem, pod_count, total_restarts)
+    prom_zero_signal = has_prometheus and not _has_prometheus_signal(avg_cpu, avg_mem, cpu_p95, mem_p95)
     restart_zombie = _is_restart_zombie(restart_rate, max_restarts_per_pod, total_restarts)
     insufficient_data = dead_pod_signal or prom_zero_signal or restart_zombie
     gc_runtime = _is_gc_runtime(deployment, key_labels)
@@ -538,20 +543,22 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
         priority = Priority.P0
 
     # P1 issues
-    if restart_rate > UNSTABLE_RESTART_RATE_THRESHOLD or (restart_rate == 0 and total_restarts > UNSTABLE_RESTART_THRESHOLD):
+    if restart_rate > UNSTABLE_RESTART_RATE_THRESHOLD or (
+        restart_rate == 0 and total_restarts > UNSTABLE_RESTART_THRESHOLD
+    ):
         issues.append("UNSTABLE")
         if priority.value > Priority.P1.value:
             priority = Priority.P1
-    
+
     if mem_limit > 0 and avg_mem > mem_limit * (MEM_SATURATION_LIMIT_THRESHOLD / 100):
         issues.append("MEM_SATURATION")
         if priority.value > Priority.P1.value:
             priority = Priority.P1
-    
+
     # P2 issues - use P95 for better assessment if available
     effective_cpu = cpu_p95 if has_prometheus and cpu_p95 > 0 else avg_cpu
     effective_mem = mem_p95 if has_prometheus and mem_p95 > 0 else avg_mem
-    
+
     if cpu_request > 0:
         if effective_cpu > cpu_request * (CPU_UNDER_REQUESTED_THRESHOLD / 100) and effective_cpu < cpu_request * 2.0:
             issues.append("CPU_UNDER_REQUESTED")
@@ -561,7 +568,7 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
             issues.append("CPU_OVER_REQUESTED")
             if priority.value > Priority.P2.value:
                 priority = Priority.P2
-    
+
     if mem_request > 0:
         if effective_mem > mem_request * (MEM_UNDER_REQUESTED_THRESHOLD / 100) and effective_mem < mem_request * 2.0:
             issues.append("MEM_UNDER_REQUESTED")
@@ -571,12 +578,12 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
             issues.append("MEM_OVER_REQUESTED")
             if priority.value > Priority.P2.value:
                 priority = Priority.P2
-    
-    if 'ReadWriteOnce' in pvc_mode:
+
+    if "ReadWriteOnce" in pvc_mode:
         issues.append("RWO_PVC")
         if priority.value > Priority.P2.value:
             priority = Priority.P2
-    
+
     # Generate recommendations
     recommendations = []
     actions = []
@@ -668,11 +675,16 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
                     recommendations.append(f"Increase CPU request to {format_cpu(rec_cpu_req)}")
                     actions.append(f"Raise CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)}")
                     cpu_delta_m = cpu_request - rec_cpu_req  # negative — needs more
-            elif effective_cpu < cpu_request * (CPU_OVER_REQUESTED_THRESHOLD / 100) and cpu_request > CPU_REDUCTION_BASELINE_M:
+            elif (
+                effective_cpu < cpu_request * (CPU_OVER_REQUESTED_THRESHOLD / 100)
+                and cpu_request > CPU_REDUCTION_BASELINE_M
+            ):
                 savings = cpu_request - rec_cpu_req
                 if savings >= CPU_REDUCTION_MIN_SAVING_M:
                     recommendations.append(f"Reduce CPU request to {format_cpu(rec_cpu_req)}")
-                    actions.append(f"Reduce CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)} (saves {format_cpu(savings)})")
+                    actions.append(
+                        f"Reduce CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)} (saves {format_cpu(savings)})"
+                    )
                     cpu_delta_m = savings  # positive — savings
 
             # Memory recommendations (request)
@@ -683,7 +695,9 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
             elif effective_mem > mem_request * (MEM_UNDER_REQUESTED_THRESHOLD / 100):
                 if rec_mem_req > mem_request:
                     recommendations.append(f"Increase memory request to {format_memory(rec_mem_req)}")
-                    actions.append(f"Raise memory REQUEST from {format_memory(mem_request)} → {format_memory(rec_mem_req)}")
+                    actions.append(
+                        f"Raise memory REQUEST from {format_memory(mem_request)} → {format_memory(rec_mem_req)}"
+                    )
                     mem_delta_mi = mem_request - rec_mem_req  # negative
             elif effective_mem < mem_request * (MEM_OVER_REQUESTED_THRESHOLD / 100):
                 # GC runtimes (JVM, Node.js) retain heap pages — `avg_mem` and even
@@ -706,7 +720,9 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
                     )
                 else:
                     recommendations.append(f"Reduce memory request to {format_memory(rec_mem_req)}")
-                    actions.append(f"Reduce memory REQUEST from {format_memory(mem_request)} → {format_memory(rec_mem_req)}")
+                    actions.append(
+                        f"Reduce memory REQUEST from {format_memory(mem_request)} → {format_memory(rec_mem_req)}"
+                    )
                     mem_delta_mi = mem_request - rec_mem_req  # positive
 
         # Limit recommendations — run regardless of UNSTABLE because OOM /
@@ -731,7 +747,11 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
             if rec_mem_req > 0:
                 rec_mem_limit = max(rec_mem_limit, rec_mem_req * 1.25)
 
-            reason = "P0: confirmed OOM kills" if oom_kills > 0 else "P1: memory saturation — request would exceed current limit"
+            reason = (
+                "P0: confirmed OOM kills"
+                if oom_kills > 0
+                else "P1: memory saturation — request would exceed current limit"
+            )
             recommendations.append(f"Increase memory limit to {format_memory(rec_mem_limit)}")
             actions.append(
                 f"Raise memory LIMIT from {format_memory(mem_limit) if mem_limit > 0 else 'none'} "
@@ -741,7 +761,9 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
         if has_prometheus and cpu_throttle > 5:
             rec_cpu_limit = max(100, cpu_p95 * 1.2, cpu_max * 1.1, rec_cpu_req * 1.5)
             recommendations.append(f"Increase CPU limit to {format_cpu(rec_cpu_limit)}")
-            actions.append(f"Raise CPU LIMIT from {format_cpu(cpu_limit) if cpu_limit > 0 else 'none'} → {format_cpu(rec_cpu_limit)} (P0: active throttling)")
+            actions.append(
+                f"Raise CPU LIMIT from {format_cpu(cpu_limit) if cpu_limit > 0 else 'none'} → {format_cpu(rec_cpu_limit)} (P0: active throttling)"
+            )
 
         # Final invariant check: if we recommend a request raise but no limit
         # change, and the proposed request would exceed the existing limit,
@@ -760,27 +782,22 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
                 f"{format_memory(safe_limit)} (request would otherwise exceed "
                 f"limit, producing an invalid PodSpec)"
             )
-    
+
     # Determine scaling approach
     if is_statefulset:
         scaling_approach = ScalingApproach.VPA
     elif priority == Priority.P0 or "UNSTABLE" in issues:
         scaling_approach = ScalingApproach.HPA_AFTER_FIX
-    elif 'ReadWriteOnce' in pvc_mode:
-        scaling_approach = ScalingApproach.VPA
-    elif replicas == 1:
+    elif "ReadWriteOnce" in pvc_mode or replicas == 1:
         scaling_approach = ScalingApproach.VPA
     elif replicas > 1 and avg_cpu > cpu_request * 0.6:
         scaling_approach = ScalingApproach.HPA
     else:
         scaling_approach = ScalingApproach.VPA
-    
+
     # Add scaling recommendations to actions
     if scaling_approach == ScalingApproach.HPA:
-        actions.append(
-            f"Enable HPA with fleet-wide policy "
-            f"({HPA_TARGET_UTILIZATION_DEFAULT}% CPU target)"
-        )
+        actions.append(f"Enable HPA with fleet-wide policy ({HPA_TARGET_UTILIZATION_DEFAULT}% CPU target)")
         actions.append("Set minReplicas: 2 for HA")
     elif scaling_approach == ScalingApproach.VPA:
         if is_statefulset:
@@ -788,10 +805,10 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
         actions.append("Enable VPA in 'Off' mode to validate recommendations")
     elif scaling_approach == ScalingApproach.HPA_AFTER_FIX:
         actions.append("Fix issues above BEFORE enabling HPA")
-    
+
     # Determine if manual action required
     requires_manual = any(issue in ["REQUESTS_NOT_SET", "OOM_KILLED", "CPU_THROTTLED", "UNSTABLE"] for issue in issues)
-    
+
     # Build current state strings
     current_cpu = f"{cpu_request:.0f}m req"
     if cpu_limit > 0:
@@ -800,7 +817,7 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
     if has_prometheus and cpu_p95 > 0:
         current_cpu += f", P95: {cpu_p95:.0f}m"
     current_cpu += ")"
-    
+
     current_mem = f"{mem_request:.0f}Mi req"
     if mem_limit > 0:
         current_mem += f", {mem_limit:.0f}Mi limit"
@@ -808,7 +825,7 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
     if has_prometheus and mem_p95 > 0:
         current_mem += f", P95: {mem_p95:.0f}Mi"
     current_mem += ")"
-    
+
     analysis = WorkloadAnalysis(
         namespace=namespace,
         deployment=deployment,
@@ -858,10 +875,10 @@ def analyze_workload(row: Dict, has_prometheus: bool) -> WorkloadAnalysis:
         cpu_delta_m=cpu_delta_m,
         mem_delta_mi=mem_delta_mi,
     )
-    
+
     # Build rationale
     analysis.rationale = build_rationale(analysis, has_prometheus)
-    
+
     return analysis
 
 
@@ -869,17 +886,17 @@ def format_cpu(millicores: float) -> str:
     """Format CPU to string."""
     if millicores < 1000:
         return f"{int(millicores)}m"
-    return f"{millicores/1000:.1f}"
+    return f"{millicores / 1000:.1f}"
 
 
 def format_memory(mebibytes: float) -> str:
     """Format memory to string."""
     if mebibytes < 1024:
         return f"{int(mebibytes)}Mi"
-    return f"{mebibytes/1024:.1f}Gi"
+    return f"{mebibytes / 1024:.1f}Gi"
 
 
-def compute_data_quality(data: List[Dict], has_prometheus: bool) -> List[Dict]:
+def compute_data_quality(data: list[dict], has_prometheus: bool) -> list[dict]:
     """Scan raw CSV rows for N/A rates on Prometheus-derived columns.
 
     Returns a list of dicts describing columns where coverage is suspect.
@@ -892,52 +909,51 @@ def compute_data_quality(data: List[Dict], has_prometheus: bool) -> List[Dict]:
     if not data or not has_prometheus:
         return []
     columns = [
-        ('CPU_Throttle_Pct', 'CPU throttling'),
-        ('CPU_P95(m)', 'CPU P95'),
-        ('Mem_P95(Mi)', 'Memory P95'),
-        ('Mem_Volatility_CV', 'Memory volatility CV'),
-        ('Restart_Rate_Per_Day', 'Restart rate per day'),
+        ("CPU_Throttle_Pct", "CPU throttling"),
+        ("CPU_P95(m)", "CPU P95"),
+        ("Mem_P95(Mi)", "Memory P95"),
+        ("Mem_Volatility_CV", "Memory volatility CV"),
+        ("Restart_Rate_Per_Day", "Restart rate per day"),
     ]
     total = len(data)
     warnings = []
     for col, label in columns:
-        na = sum(
-            1 for row in data
-            if (row.get(col) or '').strip() in ('N/A', '', '-')
-        )
+        na = sum(1 for row in data if (row.get(col) or "").strip() in ("N/A", "", "-"))
         pct = (na / total) * 100 if total else 0
         if pct > 10:
-            warnings.append({
-                'column': col,
-                'label': label,
-                'na_count': na,
-                'na_pct': pct,
-                'total': total,
-            })
+            warnings.append(
+                {
+                    "column": col,
+                    "label": label,
+                    "na_count": na,
+                    "na_pct": pct,
+                    "total": total,
+                }
+            )
     return warnings
 
 
-def check_prometheus(data: List[Dict]) -> bool:
+def check_prometheus(data: list[dict]) -> bool:
     """Check if Prometheus metrics are available."""
     if not data:
         return False
-    
+
     for row in data[:5]:
-        cpu_p95 = row.get('CPU_P95(m)', 'N/A')
-        if cpu_p95 not in ('N/A', '', '0', '0.0'):
+        cpu_p95 = row.get("CPU_P95(m)", "N/A")
+        if cpu_p95 not in ("N/A", "", "0", "0.0"):
             return True
     return False
 
 
-def _build_render_context(analyses: List["WorkloadAnalysis"], has_prometheus: bool, cluster: str) -> Dict:
+def _build_render_context(analyses: list["WorkloadAnalysis"], has_prometheus: bool, cluster: str) -> dict:
     """Assemble the full Jinja render context.
 
     Pure data — no template logic. Aggregations live in k8s_advisor.aggregations.
     """
     from k8s_advisor.aggregations import (
         build_namespace_rollups,
-        build_top_savers,
         build_pattern_groups,
+        build_top_savers,
         fleet_totals,
     )
 
@@ -957,7 +973,7 @@ def _build_render_context(analyses: List["WorkloadAnalysis"], has_prometheus: bo
         "manual": sum(1 for a in analyses if a.scaling_approach == ScalingApproach.MANUAL),
         "none_": sum(1 for a in analyses if a.scaling_approach == ScalingApproach.NONE),
     }
-    issue_counts_dict: Dict[str, int] = {}
+    issue_counts_dict: dict[str, int] = {}
     for a in analyses:
         for issue in a.issues:
             issue_counts_dict[issue] = issue_counts_dict.get(issue, 0) + 1
@@ -968,8 +984,8 @@ def _build_render_context(analyses: List["WorkloadAnalysis"], has_prometheus: bo
     # a single collapse-marker line summarizing the rest. Cuts the P0 detail
     # section from ~50 cards to ~10 on big multi-tenant clusters.
     LARGE_PATTERN_THRESHOLD = 10
-    pattern_first: Dict = {}     # (ns, prefix, priority) -> first deployment name
-    pattern_size: Dict = {}      # (ns, prefix, priority) -> count
+    pattern_first: dict = {}  # (ns, prefix, priority) -> first deployment name
+    pattern_size: dict = {}  # (ns, prefix, priority) -> count
     for g in pattern_groups:
         if len(g.workloads) >= LARGE_PATTERN_THRESHOLD:
             sorted_members = sorted(g.workloads)
@@ -989,7 +1005,7 @@ def _build_render_context(analyses: List["WorkloadAnalysis"], has_prometheus: bo
         workloads.sort(key=lambda a: (a.namespace, a.deployment))
 
         rendered = []
-        seen_collapsed: Dict = {}  # (ns, prefix, priority) -> True after first
+        seen_collapsed: dict = {}  # (ns, prefix, priority) -> True after first
         for a in workloads:
             prefix = pattern_prefix(a.deployment)
             key = (a.namespace, prefix, p.value)
@@ -998,26 +1014,32 @@ def _build_render_context(analyses: List["WorkloadAnalysis"], has_prometheus: bo
                 # Member of a large pattern group.
                 if key not in seen_collapsed:
                     # Render the first one + a collapse note.
-                    rendered.append({
-                        "kind": "workload",
-                        "analysis": a,
-                        "collapse_note": (
-                            f"+ {group_size - 1} identical `{prefix}-*` "
-                            f"instances in `{a.namespace}` collapsed "
-                            f"(see Pattern Groups)"
-                        ) if group_size > 1 else None,
-                    })
+                    rendered.append(
+                        {
+                            "kind": "workload",
+                            "analysis": a,
+                            "collapse_note": (
+                                f"+ {group_size - 1} identical `{prefix}-*` "
+                                f"instances in `{a.namespace}` collapsed "
+                                f"(see Pattern Groups)"
+                            )
+                            if group_size > 1
+                            else None,
+                        }
+                    )
                     seen_collapsed[key] = True
                 # else: silently drop subsequent members.
             else:
                 rendered.append({"kind": "workload", "analysis": a, "collapse_note": None})
 
-        priority_buckets.append({
-            "label": label,
-            "anchor": anchor,
-            "workloads": workloads,           # raw count for headers / TOC
-            "rendered": rendered,             # what the template iterates
-        })
+        priority_buckets.append(
+            {
+                "label": label,
+                "anchor": anchor,
+                "workloads": workloads,  # raw count for headers / TOC
+                "rendered": rendered,  # what the template iterates
+            }
+        )
 
     return {
         "analyses": analyses,
@@ -1041,9 +1063,10 @@ def _build_render_context(analyses: List["WorkloadAnalysis"], has_prometheus: bo
 
 def _jinja_env():
     """Build (and cache) the Jinja environment that renders the report."""
-    global _JINJA_ENV  # noqa: PLW0603
+    global _JINJA_ENV
     if _JINJA_ENV is None:
         from jinja2 import Environment, PackageLoader, select_autoescape
+
         _JINJA_ENV = Environment(
             loader=PackageLoader("k8s_advisor", "templates"),
             autoescape=select_autoescape(disabled_extensions=("md", "j2", "md.j2")),
@@ -1057,34 +1080,38 @@ def _jinja_env():
 _JINJA_ENV = None
 
 
-def generate_executive_summary(analyses: List[WorkloadAnalysis], has_prometheus: bool) -> List[str]:
+def generate_executive_summary(analyses: list[WorkloadAnalysis], has_prometheus: bool) -> list[str]:
     """Generate executive summary section."""
     lines = [
         "## Executive Summary",
         "",
     ]
-    
+
     manual_count = sum(1 for a in analyses if a.requires_manual_action)
     p0_count = sum(1 for a in analyses if a.priority == Priority.P0)
-    
+
     if manual_count > 0:
-        lines.extend([
-            "### ⚠️ Immediate Action Required",
+        lines.extend(
+            [
+                "### ⚠️ Immediate Action Required",
+                "",
+                f"**{manual_count} workloads require immediate manual resource updates** before HPA/VPA can be enabled.",
+                f"**{p0_count} P0 workloads** require immediate action: missing resource requests (scheduler impact + HPA blocked), active CPU throttling (live performance degradation), or confirmed OOM kills (apps actively crashing).",
+                "",
+                "**👉 [Jump to P0 Priority Section →](#p0-priority)**",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "### Priority Distribution",
             "",
-            f"**{manual_count} workloads require immediate manual resource updates** before HPA/VPA can be enabled.",
-            f"**{p0_count} P0 workloads** require immediate action: missing resource requests (scheduler impact + HPA blocked), active CPU throttling (live performance degradation), or confirmed OOM kills (apps actively crashing).",
-            "",
-            "**👉 [Jump to P0 Priority Section →](#p0-priority)**",
-            "",
-        ])
-    
-    lines.extend([
-        "### Priority Distribution",
-        "",
-        "| Priority | Count | Description |",
-        "|----------|-------|-------------|",
-    ])
-    
+            "| Priority | Count | Description |",
+            "|----------|-------|-------------|",
+        ]
+    )
+
     for priority in Priority:
         count = sum(1 for a in analyses if a.priority == priority)
         desc = {
@@ -1094,15 +1121,17 @@ def generate_executive_summary(analyses: List[WorkloadAnalysis], has_prometheus:
             Priority.P3: "Low - no significant issues",
         }.get(priority, "")
         lines.append(f"| **{priority.value}** | {count} | {desc} |")
-    
-    lines.extend([
-        "",
-        "### Scaling Approach Recommendations",
-        "",
-        "| Approach | Count | Description |",
-        "|----------|-------|-------------|",
-    ])
-    
+
+    lines.extend(
+        [
+            "",
+            "### Scaling Approach Recommendations",
+            "",
+            "| Approach | Count | Description |",
+            "|----------|-------|-------------|",
+        ]
+    )
+
     for approach in ScalingApproach:
         count = sum(1 for a in analyses if a.scaling_approach == approach)
         desc = {
@@ -1113,36 +1142,40 @@ def generate_executive_summary(analyses: List[WorkloadAnalysis], has_prometheus:
             ScalingApproach.NONE: "Excluded from autoscaling",
         }.get(approach, "")
         lines.append(f"| **{approach.value}** | {count} | {desc} |")
-    
-    lines.extend([
-        "",
-        "_* HPA workloads can optionally run VPA in `updateMode: Off` for continuous right-sizing insights._",
-        "",
-    ])
-    
+
+    lines.extend(
+        [
+            "",
+            "_* HPA workloads can optionally run VPA in `updateMode: Off` for continuous right-sizing insights._",
+            "",
+        ]
+    )
+
     # Common issues
     issue_counts = {}
     for analysis in analyses:
         for issue in analysis.issues:
             issue_counts[issue] = issue_counts.get(issue, 0) + 1
-    
+
     if issue_counts:
-        lines.extend([
-            "### Common Issues",
-            "",
-            "| Issue | Count |",
-            "|-------|-------|",
-        ])
+        lines.extend(
+            [
+                "### Common Issues",
+                "",
+                "| Issue | Count |",
+                "|-------|-------|",
+            ]
+        )
         for issue, count in sorted(issue_counts.items(), key=lambda x: -x[1]):
             lines.append(f"| {issue} | {count} |")
         lines.append("")
-    
+
     lines.extend(["---", ""])
-    
+
     return lines
 
 
-def generate_implementation_guide() -> List[str]:
+def generate_implementation_guide() -> list[str]:
     """Generate implementation guide section."""
     return [
         "## Implementation Guide",
@@ -1213,7 +1246,7 @@ def generate_implementation_guide() -> List[str]:
         "    kind: Deployment",
         "    name: <deployment-name>",
         "  updatePolicy:",
-        "    updateMode: \"Off\"           # Start with Off, validate for 24-48h",
+        '    updateMode: "Off"           # Start with Off, validate for 24-48h',
         "  resourcePolicy:",
         "    containerPolicies:",
         "    - containerName: '*'",
@@ -1238,7 +1271,7 @@ def generate_implementation_guide() -> List[str]:
         "```yaml",
         "# VPA in Off mode for continuous recommendations",
         "updatePolicy:",
-        "  updateMode: \"Off\"",
+        '  updateMode: "Off"',
         "",
         "# HPA handles replica scaling",
         "# VPA provides guidance for request tuning",
@@ -1274,11 +1307,11 @@ def generate_implementation_guide() -> List[str]:
 
 
 def generate_report(
-    analyses: List[WorkloadAnalysis],
+    analyses: list[WorkloadAnalysis],
     output_path: str,
     has_prometheus: bool,
-    graphs_dir: str = None,
-    data_quality_warnings: Optional[List[Dict]] = None,
+    graphs_dir: Optional[str] = None,
+    data_quality_warnings: Optional[list[dict]] = None,
 ):
     """Render the markdown report from k8s_advisor/templates/report.md.j2.
 
@@ -1299,17 +1332,17 @@ def generate_report(
 
 def analyze_csv_file(csv_path: str, output_dir: str = "reports", generate_graphs: bool = False) -> str:
     """Main analysis function."""
-    
+
     print(f"🔍 Analyzing: {csv_path}")
-    
+
     # Load CSV
     data = []
-    with open(csv_path, 'r') as f:
+    with open(csv_path) as f:
         reader = csv.DictReader(f)
         data = list(reader)
-    
+
     print(f"✅ Loaded {len(data)} workloads")
-    
+
     # Check Prometheus availability
     has_prometheus = check_prometheus(data)
     if has_prometheus:
@@ -1327,9 +1360,9 @@ def analyze_csv_file(csv_path: str, output_dir: str = "reports", generate_graphs
     for row in data:
         analysis = analyze_workload(row, has_prometheus)
         analyses.append(analysis)
-    
+
     print(f"✅ Analyzed {len(analyses)} workloads")
-    
+
     # Generate graphs if requested. We render from the in-memory analyses
     # (not from the CSV) so the visualizer shares the analyzer's source of
     # truth — see visualizer.py docstring for context.
@@ -1337,6 +1370,7 @@ def analyze_csv_file(csv_path: str, output_dir: str = "reports", generate_graphs
     if generate_graphs:
         try:
             from k8s_advisor.visualizer import render_graphs
+
             graphs_dir = Path(output_dir) / "graphs"
             if render_graphs(analyses, str(graphs_dir)):
                 # Path the markdown template should reference, relative to
@@ -1363,18 +1397,20 @@ def analyze_csv_file(csv_path: str, output_dir: str = "reports", generate_graphs
     output_path = Path(output_dir) / f"k8s-advisor_{cluster}_{timestamp}.md"
 
     generate_report(
-        analyses, str(output_path), has_prometheus,
+        analyses,
+        str(output_path),
+        has_prometheus,
         graphs_dir=graphs_subdir,
         data_quality_warnings=data_quality_warnings,
     )
     print(f"✅ Report: {output_path}")
-    
+
     # Print summary
     p0 = sum(1 for a in analyses if a.priority == Priority.P0)
     p1 = sum(1 for a in analyses if a.priority == Priority.P1)
     p2 = sum(1 for a in analyses if a.priority == Priority.P2)
     manual = sum(1 for a in analyses if a.requires_manual_action)
-    
+
     print("\n📊 Summary:")
     if p0 > 0:
         print(f"  ⚠️  P0 Blockers: {p0}")
@@ -1384,7 +1420,7 @@ def analyze_csv_file(csv_path: str, output_dir: str = "reports", generate_graphs
         print(f"  🟡 P2 Medium: {p2}")
     if manual > 0:
         print(f"  🔧 Manual action required: {manual}")
-    
+
     return str(output_path)
 
 
@@ -1392,8 +1428,8 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python simple_analyzer.py <csv_file> [--graphs]")
         sys.exit(1)
-    
+
     csv_file = sys.argv[1]
     generate_graphs = "--graphs" in sys.argv
-    
+
     analyze_csv_file(csv_file, generate_graphs=generate_graphs)

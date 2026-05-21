@@ -8,7 +8,7 @@ graphs_dir is supplied.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -20,7 +20,7 @@ from k8s_advisor.simple_analyzer import (
 from k8s_advisor.visualizer import _is_excluded_from_savings, render_graphs
 
 
-def _row(**overrides) -> Dict[str, Any]:
+def _row(**overrides) -> dict[str, Any]:
     base = {
         "Cluster": "production-east",
         "Namespace": "demo",
@@ -67,49 +67,89 @@ def _row(**overrides) -> Dict[str, Any]:
     return base
 
 
-def _diverse_analyses() -> List:
+def _diverse_analyses() -> list:
     """A small fleet that exercises all 6 graphs."""
     rows = [
         # Healthy workload — green dot in scatter
-        _row(Deployment="green-app", **{
-            "CPU_Request(m)": "100", "Avg_CPU_Usage(m)": "100",
-            "Mem_Request(Mi)": "200", "Avg_Mem_Usage(Mi)": "200",
-        }),
+        _row(
+            Deployment="green-app",
+            **{
+                "CPU_Request(m)": "100",
+                "Avg_CPU_Usage(m)": "100",
+                "Mem_Request(Mi)": "200",
+                "Avg_Mem_Usage(Mi)": "200",
+            },
+        ),
         # Over-requested CPU saver
-        _row(Deployment="over-cpu", **{
-            "CPU_Request(m)": "500", "Avg_CPU_Usage(m)": "10",
-            "Mem_Request(Mi)": "100", "Avg_Mem_Usage(Mi)": "60",
-        }),
+        _row(
+            Deployment="over-cpu",
+            **{
+                "CPU_Request(m)": "500",
+                "Avg_CPU_Usage(m)": "10",
+                "Mem_Request(Mi)": "100",
+                "Avg_Mem_Usage(Mi)": "60",
+            },
+        ),
         # Over-requested mem saver
-        _row(Deployment="over-mem", **{
-            "CPU_Request(m)": "200", "Avg_CPU_Usage(m)": "100",
-            "Mem_Request(Mi)": "2000", "Avg_Mem_Usage(Mi)": "200",
-        }),
+        _row(
+            Deployment="over-mem",
+            **{
+                "CPU_Request(m)": "200",
+                "Avg_CPU_Usage(m)": "100",
+                "Mem_Request(Mi)": "2000",
+                "Avg_Mem_Usage(Mi)": "200",
+            },
+        ),
         # Bursty Prometheus — must be excluded from savings ranking
-        _row(Deployment="prometheus-fabric", **{
-            "CPU_Request(m)": "500", "Avg_CPU_Usage(m)": "10",
-            "Mem_Request(Mi)": "10000", "Avg_Mem_Usage(Mi)": "200",
-        }),
+        _row(
+            Deployment="prometheus-fabric",
+            **{
+                "CPU_Request(m)": "500",
+                "Avg_CPU_Usage(m)": "10",
+                "Mem_Request(Mi)": "10000",
+                "Avg_Mem_Usage(Mi)": "200",
+            },
+        ),
         # GC runtime — must be excluded too
-        _row(Deployment="kafka-broker", **{
-            "CPU_Request(m)": "500", "Avg_CPU_Usage(m)": "10",
-            "Mem_Request(Mi)": "5000", "Avg_Mem_Usage(Mi)": "200",
-        }),
+        _row(
+            Deployment="kafka-broker",
+            **{
+                "CPU_Request(m)": "500",
+                "Avg_CPU_Usage(m)": "10",
+                "Mem_Request(Mi)": "5000",
+                "Avg_Mem_Usage(Mi)": "200",
+            },
+        ),
         # Under-requested CPU
-        _row(Deployment="hot-app", **{
-            "CPU_Request(m)": "100", "Avg_CPU_Usage(m)": "250",
-            "Mem_Request(Mi)": "200", "Avg_Mem_Usage(Mi)": "180",
-        }),
+        _row(
+            Deployment="hot-app",
+            **{
+                "CPU_Request(m)": "100",
+                "Avg_CPU_Usage(m)": "250",
+                "Mem_Request(Mi)": "200",
+                "Avg_Mem_Usage(Mi)": "180",
+            },
+        ),
         # OOM kill victim
-        _row(Deployment="oom-app", **{
-            "OOMKilled_Count": "3", "Total_Restarts": "5",
-            "Avg_Mem_Usage(Mi)": "300", "Mem_Limit(Mi)": "256",
-        }),
+        _row(
+            Deployment="oom-app",
+            **{
+                "OOMKilled_Count": "3",
+                "Total_Restarts": "5",
+                "Avg_Mem_Usage(Mi)": "300",
+                "Mem_Limit(Mi)": "256",
+            },
+        ),
         # Restart-zombie — INSUFFICIENT_DATA
-        _row(Deployment="zombie-app", **{
-            "Total_Restarts": "200", "Restart_Rate_Per_Day": "30",
-            "Avg_CPU_Usage(m)": "0", "Avg_Mem_Usage(Mi)": "0",
-        }),
+        _row(
+            Deployment="zombie-app",
+            **{
+                "Total_Restarts": "200",
+                "Restart_Rate_Per_Day": "30",
+                "Avg_CPU_Usage(m)": "0",
+                "Avg_Mem_Usage(Mi)": "0",
+            },
+        ),
     ]
     return [analyze_workload(r, has_prometheus=False) for r in rows]
 
@@ -140,15 +180,17 @@ def test_pattern_group_impact_only_when_groups_exist(tmp_path: Path):
     pytest.importorskip("matplotlib")
     rows = []
     for n in range(5):
-        rows.append(_row(
-            Namespace="rook-ceph",
-            Deployment=f"rook-ceph-osd-{n}",
-            **{
-                "CPU_Request(m)": "0",
-                "Mem_Request(Mi)": "0",
-                "Avg_CPU_Usage(m)": "100",
-            },
-        ))
+        rows.append(
+            _row(
+                Namespace="rook-ceph",
+                Deployment=f"rook-ceph-osd-{n}",
+                **{
+                    "CPU_Request(m)": "0",
+                    "Mem_Request(Mi)": "0",
+                    "Avg_CPU_Usage(m)": "100",
+                },
+            )
+        )
     analyses = [analyze_workload(r, has_prometheus=False) for r in rows]
     out = tmp_path / "graphs"
     assert render_graphs(analyses, str(out)) is True
@@ -180,10 +222,12 @@ def test_priority_pie_counts_match_analyzer(tmp_path: Path):
     assert pie.exists()
     # Re-derive what the visualizer would have used and confirm parity.
     from k8s_advisor.visualizer import _priority_distribution
+
     _priority_distribution(analyses, out)  # idempotent, smoke check
     # Direct value parity with the simple_analyzer summary.
-    assert p_counts[Priority.P0] + p_counts[Priority.P1] + \
-           p_counts[Priority.P2] + p_counts[Priority.P3] == len(analyses)
+    assert p_counts[Priority.P0] + p_counts[Priority.P1] + p_counts[Priority.P2] + p_counts[Priority.P3] == len(
+        analyses
+    )
 
 
 def test_bursty_and_gc_excluded_from_savings():

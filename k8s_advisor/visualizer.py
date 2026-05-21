@@ -9,12 +9,13 @@ Sharing one source eliminates that whole class of bug.
 
 import csv
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import List, Sequence
 
 
 def safe_float(value, default=0.0):
-    if not value or value in ('N/A', '', '-'):
+    """Coerce a CSV cell to float, returning `default` for `N/A`/empty/junk."""
+    if not value or value in ("N/A", "", "-"):
         return default
     try:
         return float(value)
@@ -35,7 +36,8 @@ def render_graphs(analyses: Sequence, output_dir: str = "reports/graphs") -> boo
     """
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt  # noqa: F401
         import numpy as np  # noqa: F401
     except ImportError:
@@ -86,7 +88,7 @@ def generate_graphs(csv_path: str, output_dir: str = "reports/graphs") -> bool:
     print(f"📊 Generating graphs from: {csv_path}")
     from k8s_advisor.simple_analyzer import analyze_workload, check_prometheus
 
-    with open(csv_path, 'r') as f:
+    with open(csv_path) as f:
         rows = list(csv.DictReader(f))
     if not rows:
         print("⚠️  No data to visualize")
@@ -113,7 +115,7 @@ def _short_label(analysis, max_len: int = 50) -> str:
     # Keep namespace prefix + ellipsis + tail of deployment name.
     keep = max_len - 1
     if len(deployment) >= keep:
-        return "…" + deployment[-(keep - 1):]
+        return "…" + deployment[-(keep - 1) :]
     available = keep - len(deployment) - 2  # 2 for "/…"
     if available <= 0:
         return "…" + deployment
@@ -133,9 +135,7 @@ def _is_excluded_from_savings(analysis) -> bool:
         return True
     if getattr(analysis, "insufficient_data", False):
         return True
-    if "UNSTABLE" in getattr(analysis, "issues", []):
-        return True
-    return False
+    return "UNSTABLE" in getattr(analysis, "issues", [])
 
 
 # ----------------------------------------------------------------------------
@@ -144,6 +144,7 @@ def _is_excluded_from_savings(analysis) -> bool:
 
 
 def _resource_efficiency(analyses: Sequence, output_path: Path) -> bool:
+    """Render the CPU vs Memory usage scatter (graph 1)."""
     import matplotlib.pyplot as plt
 
     pts = []
@@ -155,59 +156,76 @@ def _resource_efficiency(analyses: Sequence, output_path: Path) -> bool:
         if cpu_pct == 0 and mem_pct == 0:
             continue
         # Cap at 300% only for plotting; remember the true values for labels.
-        pts.append({
-            "label": _short_label(a, 30),
-            "cpu_true": cpu_pct,
-            "mem_true": mem_pct,
-            "cpu_clip": min(cpu_pct, 300),
-            "mem_clip": min(mem_pct, 300),
-        })
+        pts.append(
+            {
+                "label": _short_label(a, 30),
+                "cpu_true": cpu_pct,
+                "mem_true": mem_pct,
+                "cpu_clip": min(cpu_pct, 300),
+                "mem_clip": min(mem_pct, 300),
+            }
+        )
     if not pts:
         return False
 
     def color_of(cpu, mem):
+        """Pick a marker color based on CPU/Mem usage % buckets."""
         if cpu < 50 or mem < 50:
-            return 'red'
+            return "red"
         if cpu > 200 or mem > 200:
-            return 'orange'
+            return "orange"
         if 85 < cpu < 200 and 85 < mem < 200:
-            return 'green'
-        return 'gold'
+            return "green"
+        return "gold"
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    _fig, ax = plt.subplots(figsize=(12, 8))
     colors = [color_of(p["cpu_clip"], p["mem_clip"]) for p in pts]
-    ax.scatter([p["cpu_clip"] for p in pts], [p["mem_clip"] for p in pts],
-               c=colors, alpha=0.55, s=80, edgecolors='black', linewidths=0.3)
+    ax.scatter(
+        [p["cpu_clip"] for p in pts],
+        [p["mem_clip"] for p in pts],
+        c=colors,
+        alpha=0.55,
+        s=80,
+        edgecolors="black",
+        linewidths=0.3,
+    )
 
     for p in pts:
         if p["cpu_true"] > 200 or p["mem_true"] > 200:
-            ax.annotate(p["label"],
-                        (p["cpu_clip"], p["mem_clip"]),
-                        xytext=(5, 5), textcoords="offset points",
-                        fontsize=7, alpha=0.85)
+            ax.annotate(
+                p["label"],
+                (p["cpu_clip"], p["mem_clip"]),
+                xytext=(5, 5),
+                textcoords="offset points",
+                fontsize=7,
+                alpha=0.85,
+            )
 
     for x in (50, 85, 200):
-        ax.axvline(x=x, color='gray', linestyle='--', alpha=0.25)
-        ax.axhline(y=x, color='gray', linestyle='--', alpha=0.25)
+        ax.axvline(x=x, color="gray", linestyle="--", alpha=0.25)
+        ax.axhline(y=x, color="gray", linestyle="--", alpha=0.25)
 
-    ax.set_xlabel('CPU usage % of request', fontsize=12)
-    ax.set_ylabel('Memory usage % of request', fontsize=12)
-    ax.set_title('Resource Efficiency — CPU vs Memory Usage',
-                 fontsize=14, fontweight='bold')
+    ax.set_xlabel("CPU usage % of request", fontsize=12)
+    ax.set_ylabel("Memory usage % of request", fontsize=12)
+    ax.set_title("Resource Efficiency — CPU vs Memory Usage", fontsize=14, fontweight="bold")
     ax.set_xlim(left=-5)
     ax.set_ylim(bottom=-5)
     ax.grid(True, alpha=0.3)
 
     from matplotlib.patches import Patch
-    ax.legend(handles=[
-        Patch(facecolor='green', label='Efficient (CPU & Mem 85–200%)'),
-        Patch(facecolor='gold', label='Acceptable'),
-        Patch(facecolor='red', label='Over-requested (<50%)'),
-        Patch(facecolor='orange', label='Under-requested (>200%, capped)'),
-    ], loc='upper right')
+
+    ax.legend(
+        handles=[
+            Patch(facecolor="green", label="Efficient (CPU & Mem 85–200%)"),
+            Patch(facecolor="gold", label="Acceptable"),
+            Patch(facecolor="red", label="Over-requested (<50%)"),
+            Patch(facecolor="orange", label="Under-requested (>200%, capped)"),
+        ],
+        loc="upper right",
+    )
 
     plt.tight_layout()
-    plt.savefig(output_path / '1_resource_efficiency.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "1_resource_efficiency.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 1_resource_efficiency.png")
     return True
@@ -219,6 +237,11 @@ def _resource_efficiency(analyses: Sequence, output_path: Path) -> bool:
 
 
 def _top_over_requested(analyses: Sequence, output_path: Path) -> bool:
+    """Render the Top-10 over-requested CPU + Mem savers (graph 2).
+
+    BURSTY / GC_RUNTIME / UNSTABLE workloads are excluded — see
+    `_is_excluded_from_savings` for rationale.
+    """
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -238,42 +261,48 @@ def _top_over_requested(analyses: Sequence, output_path: Path) -> bool:
     cpu_top = sorted(cpu_savers, key=lambda x: -x[1])[:10]
     mem_top = sorted(mem_savers, key=lambda x: -x[1])[:10]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
     if cpu_top:
         names = [_short_label(a, 50) for a, _ in cpu_top]
         vals = [v for _, v in cpu_top]
         y = np.arange(len(names))
-        ax1.barh(y, vals, color='coral')
+        ax1.barh(y, vals, color="coral")
         ax1.set_yticks(y)
         ax1.set_yticklabels(names, fontsize=9)
         ax1.invert_yaxis()
-        ax1.set_xlabel('CPU savings (millicores)', fontsize=11)
-        ax1.grid(axis='x', alpha=0.3)
+        ax1.set_xlabel("CPU savings (millicores)", fontsize=11)
+        ax1.grid(axis="x", alpha=0.3)
     else:
-        ax1.text(0.5, 0.5, 'No CPU savings recommendations',
-                 ha='center', va='center', transform=ax1.transAxes, fontsize=11)
-    ax1.set_title('Top 10 Over-Requested — CPU\n(BURSTY / GC / UNSTABLE excluded)',
-                  fontsize=12, fontweight='bold')
+        ax1.text(
+            0.5, 0.5, "No CPU savings recommendations", ha="center", va="center", transform=ax1.transAxes, fontsize=11
+        )
+    ax1.set_title("Top 10 Over-Requested — CPU\n(BURSTY / GC / UNSTABLE excluded)", fontsize=12, fontweight="bold")
 
     if mem_top:
         names = [_short_label(a, 50) for a, _ in mem_top]
         vals = [v for _, v in mem_top]
         y = np.arange(len(names))
-        ax2.barh(y, vals, color='lightblue')
+        ax2.barh(y, vals, color="lightblue")
         ax2.set_yticks(y)
         ax2.set_yticklabels(names, fontsize=9)
         ax2.invert_yaxis()
-        ax2.set_xlabel('Memory savings (Mi)', fontsize=11)
-        ax2.grid(axis='x', alpha=0.3)
+        ax2.set_xlabel("Memory savings (Mi)", fontsize=11)
+        ax2.grid(axis="x", alpha=0.3)
     else:
-        ax2.text(0.5, 0.5, 'No memory savings recommendations',
-                 ha='center', va='center', transform=ax2.transAxes, fontsize=11)
-    ax2.set_title('Top 10 Over-Requested — Memory\n(BURSTY / GC / UNSTABLE excluded)',
-                  fontsize=12, fontweight='bold')
+        ax2.text(
+            0.5,
+            0.5,
+            "No memory savings recommendations",
+            ha="center",
+            va="center",
+            transform=ax2.transAxes,
+            fontsize=11,
+        )
+    ax2.set_title("Top 10 Over-Requested — Memory\n(BURSTY / GC / UNSTABLE excluded)", fontsize=12, fontweight="bold")
 
     plt.tight_layout()
-    plt.savefig(output_path / '2_top_over_requested.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "2_top_over_requested.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 2_top_over_requested.png")
     return True
@@ -285,6 +314,7 @@ def _top_over_requested(analyses: Sequence, output_path: Path) -> bool:
 
 
 def _top_under_requested(analyses: Sequence, output_path: Path) -> bool:
+    """Render the Top-10 under-requested CPU + Mem raises (graph 3)."""
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -304,9 +334,10 @@ def _top_under_requested(analyses: Sequence, output_path: Path) -> bool:
     cpu_top = sorted(cpu_raises, key=lambda x: -x[1])[:10]
     mem_top = sorted(mem_raises, key=lambda x: -x[1])[:10]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    _fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
     def _draw(ax, top, color, xlabel, title):
+        """Draw a horizontal bar chart on `ax` for one panel of graph 3."""
         if top:
             names = [_short_label(a, 50) for a, _ in top]
             vals = [v for _, v in top]
@@ -316,19 +347,16 @@ def _top_under_requested(analyses: Sequence, output_path: Path) -> bool:
             ax.set_yticklabels(names, fontsize=9)
             ax.invert_yaxis()
             ax.set_xlabel(xlabel, fontsize=11)
-            ax.grid(axis='x', alpha=0.3)
+            ax.grid(axis="x", alpha=0.3)
         else:
-            ax.text(0.5, 0.5, 'No raise recommendations',
-                    ha='center', va='center', transform=ax.transAxes, fontsize=11)
-        ax.set_title(title, fontsize=12, fontweight='bold')
+            ax.text(0.5, 0.5, "No raise recommendations", ha="center", va="center", transform=ax.transAxes, fontsize=11)
+        ax.set_title(title, fontsize=12, fontweight="bold")
 
-    _draw(ax1, cpu_top, 'orange',
-          'Additional CPU needed (millicores)', 'Top 10 Under-Requested — CPU')
-    _draw(ax2, mem_top, 'gold',
-          'Additional memory needed (Mi)', 'Top 10 Under-Requested — Memory')
+    _draw(ax1, cpu_top, "orange", "Additional CPU needed (millicores)", "Top 10 Under-Requested — CPU")
+    _draw(ax2, mem_top, "gold", "Additional memory needed (Mi)", "Top 10 Under-Requested — Memory")
 
     plt.tight_layout()
-    plt.savefig(output_path / '3_top_under_requested.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "3_top_under_requested.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 3_top_under_requested.png")
     return True
@@ -340,6 +368,12 @@ def _top_under_requested(analyses: Sequence, output_path: Path) -> bool:
 
 
 def _priority_distribution(analyses: Sequence, output_path: Path) -> bool:
+    """Render the P0/P1/P2/P3 pie chart (graph 4).
+
+    Reads `priority` directly off each analysis — same source the
+    markdown report uses, so the pie can never disagree with the
+    Priority Distribution table.
+    """
     import matplotlib.pyplot as plt
 
     p0 = sum(1 for a in analyses if a.priority.value == "P0")
@@ -349,33 +383,35 @@ def _priority_distribution(analyses: Sequence, output_path: Path) -> bool:
 
     counts = [p0, p1, p2, p3]
     labels = [
-        f'P0 Blocker\n({p0})',
-        f'P1 High\n({p1})',
-        f'P2 Medium\n({p2})',
-        f'P3 Low\n({p3})',
+        f"P0 Blocker\n({p0})",
+        f"P1 High\n({p1})",
+        f"P2 Medium\n({p2})",
+        f"P3 Low\n({p3})",
     ]
-    colors = ['#ff4444', '#ff8844', '#ffdd44', '#44ff44']
+    colors = ["#ff4444", "#ff8844", "#ffdd44", "#44ff44"]
     if sum(counts) == 0:
         return False
 
     # Filter out empty wedges so the pie doesn't draw 0% slices.
-    visible = [(c, l, col) for c, l, col in zip(counts, labels, colors) if c > 0]
+    visible = [(c, lbl, col) for c, lbl, col in zip(counts, labels, colors) if c > 0]
     counts, labels, colors = zip(*visible)
 
-    fig, ax = plt.subplots(figsize=(10, 8))
-    wedges, texts, autotexts = ax.pie(
-        counts, labels=labels, colors=colors,
-        autopct='%1.1f%%', startangle=90,
+    _fig, ax = plt.subplots(figsize=(10, 8))
+    _wedges, _texts, autotexts = ax.pie(
+        counts,
+        labels=labels,
+        colors=colors,
+        autopct="%1.1f%%",
+        startangle=90,
     )
     for autotext in autotexts:
-        autotext.set_color('black')
-        autotext.set_fontweight('bold')
+        autotext.set_color("black")
+        autotext.set_fontweight("bold")
         autotext.set_fontsize(12)
-    ax.set_title('Workload Priority Distribution',
-                 fontsize=14, fontweight='bold', pad=20)
+    ax.set_title("Workload Priority Distribution", fontsize=14, fontweight="bold", pad=20)
 
     plt.tight_layout()
-    plt.savefig(output_path / '4_priority_distribution.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "4_priority_distribution.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 4_priority_distribution.png")
     return True
@@ -387,6 +423,7 @@ def _priority_distribution(analyses: Sequence, output_path: Path) -> bool:
 
 
 def _stability_analysis(analyses: Sequence, output_path: Path) -> bool:
+    """Render the OOM-kills + restart-activity dual-panel chart (graph 6)."""
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -407,27 +444,34 @@ def _stability_analysis(analyses: Sequence, output_path: Path) -> bool:
     if not ooms and not restarts:
         return False
 
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+    _fig, axes = plt.subplots(2, 1, figsize=(14, 10))
     ax1, ax2 = axes
 
     if ooms:
         names = [_short_label(a, 60) for a, _ in ooms]
         vals = [v for _, v in ooms]
         y = np.arange(len(names))
-        ax1.barh(y, vals, color='darkred', alpha=0.75)
+        ax1.barh(y, vals, color="darkred", alpha=0.75)
         ax1.set_yticks(y)
         ax1.set_yticklabels(names, fontsize=9)
         ax1.invert_yaxis()
-        ax1.set_xlabel('OOM kill count', fontsize=11)
-        ax1.grid(axis='x', alpha=0.3)
+        ax1.set_xlabel("OOM kill count", fontsize=11)
+        ax1.grid(axis="x", alpha=0.3)
     else:
-        ax1.text(0.5, 0.5, 'No OOM kills detected — good',
-                 ha='center', va='center', transform=ax1.transAxes,
-                 fontsize=12, color='green', fontweight='bold')
+        ax1.text(
+            0.5,
+            0.5,
+            "No OOM kills detected — good",
+            ha="center",
+            va="center",
+            transform=ax1.transAxes,
+            fontsize=12,
+            color="green",
+            fontweight="bold",
+        )
         ax1.set_xticks([])
         ax1.set_yticks([])
-    ax1.set_title('Workloads with OOM Kills (Top 10)',
-                  fontsize=12, fontweight='bold')
+    ax1.set_title("Workloads with OOM Kills (Top 10)", fontsize=12, fontweight="bold")
 
     if restarts:
         # Mixed-units title — annotate per-bar to avoid confusion.
@@ -435,26 +479,34 @@ def _stability_analysis(analyses: Sequence, output_path: Path) -> bool:
         vals = [v for _, v, _ in restarts]
         suffixes = [s for _, _, s in restarts]
         y = np.arange(len(names))
-        bars = ax2.barh(y, vals, color='darkorange', alpha=0.75)
+        bars = ax2.barh(y, vals, color="darkorange", alpha=0.75)
         ax2.set_yticks(y)
         ax2.set_yticklabels(names, fontsize=9)
         ax2.invert_yaxis()
-        ax2.set_xlabel('Restarts (rate per day, fallback to total count)', fontsize=11)
-        ax2.grid(axis='x', alpha=0.3)
+        ax2.set_xlabel("Restarts (rate per day, fallback to total count)", fontsize=11)
+        ax2.grid(axis="x", alpha=0.3)
         for bar, suffix in zip(bars, suffixes):
-            ax2.text(bar.get_width(), bar.get_y() + bar.get_height() / 2,
-                     f' {suffix}', va='center', fontsize=8, alpha=0.7)
+            ax2.text(
+                bar.get_width(), bar.get_y() + bar.get_height() / 2, f" {suffix}", va="center", fontsize=8, alpha=0.7
+            )
     else:
-        ax2.text(0.5, 0.5, 'No restart activity detected',
-                 ha='center', va='center', transform=ax2.transAxes,
-                 fontsize=12, color='green', fontweight='bold')
+        ax2.text(
+            0.5,
+            0.5,
+            "No restart activity detected",
+            ha="center",
+            va="center",
+            transform=ax2.transAxes,
+            fontsize=12,
+            color="green",
+            fontweight="bold",
+        )
         ax2.set_xticks([])
         ax2.set_yticks([])
-    ax2.set_title('Workloads with Restart Activity (Top 10)',
-                  fontsize=12, fontweight='bold')
+    ax2.set_title("Workloads with Restart Activity (Top 10)", fontsize=12, fontweight="bold")
 
     plt.tight_layout()
-    plt.savefig(output_path / '6_stability_analysis.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "6_stability_analysis.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 6_stability_analysis.png")
     return True
@@ -470,9 +522,10 @@ def _namespace_risk(analyses: Sequence, output_path: Path) -> bool:
 
     Drives team-handoff conversations: who owns the most fires?
     """
+    from collections import defaultdict
+
     import matplotlib.pyplot as plt
     import numpy as np
-    from collections import defaultdict
 
     counts = defaultdict(lambda: [0, 0, 0, 0])  # [P0, P1, P2, P3]
     for a in analyses:
@@ -493,23 +546,22 @@ def _namespace_risk(analyses: Sequence, output_path: Path) -> bool:
     p2 = np.array([v[2] for _, v in rows])
     p3 = np.array([v[3] for _, v in rows])
 
-    fig, ax = plt.subplots(figsize=(12, max(5, 0.45 * len(namespaces) + 1)))
+    _fig, ax = plt.subplots(figsize=(12, max(5, 0.45 * len(namespaces) + 1)))
     y = np.arange(len(namespaces))
-    ax.barh(y, p0, color='#ff4444', label='P0 Blocker')
-    ax.barh(y, p1, left=p0, color='#ff8844', label='P1 High')
-    ax.barh(y, p2, left=p0 + p1, color='#ffdd44', label='P2 Medium')
-    ax.barh(y, p3, left=p0 + p1 + p2, color='#44ff44', label='P3 Low')
+    ax.barh(y, p0, color="#ff4444", label="P0 Blocker")
+    ax.barh(y, p1, left=p0, color="#ff8844", label="P1 High")
+    ax.barh(y, p2, left=p0 + p1, color="#ffdd44", label="P2 Medium")
+    ax.barh(y, p3, left=p0 + p1 + p2, color="#44ff44", label="P3 Low")
     ax.set_yticks(y)
     ax.set_yticklabels(namespaces, fontsize=9)
     ax.invert_yaxis()
-    ax.set_xlabel('Workloads', fontsize=11)
-    ax.set_title('Namespace Risk Heatmap (Top 15 by P0 count)',
-                 fontsize=13, fontweight='bold')
-    ax.legend(loc='lower right')
-    ax.grid(axis='x', alpha=0.3)
+    ax.set_xlabel("Workloads", fontsize=11)
+    ax.set_title("Namespace Risk Heatmap (Top 15 by P0 count)", fontsize=13, fontweight="bold")
+    ax.legend(loc="lower right")
+    ax.grid(axis="x", alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(output_path / '7_namespace_risk.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "7_namespace_risk.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 7_namespace_risk.png")
     return True
@@ -525,12 +577,12 @@ def _fleet_capacity(analyses: Sequence, output_path: Path) -> bool:
 
     Direct answer to 'where is the cluster paying for empty?'
     """
-    import matplotlib.pyplot as plt
-    import numpy as np
     from collections import defaultdict
 
-    by_ns = defaultdict(lambda: {"cpu_req": 0.0, "cpu_avg": 0.0,
-                                 "mem_req": 0.0, "mem_avg": 0.0})
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    by_ns = defaultdict(lambda: {"cpu_req": 0.0, "cpu_avg": 0.0, "mem_req": 0.0, "mem_avg": 0.0})
     for a in analyses:
         ns = by_ns[a.namespace]
         ns["cpu_req"] += max(0.0, a.cpu_request)
@@ -543,39 +595,39 @@ def _fleet_capacity(analyses: Sequence, output_path: Path) -> bool:
     cpu_top = sorted(by_ns.items(), key=lambda kv: -kv[1]["cpu_req"])[:10]
     mem_top = sorted(by_ns.items(), key=lambda kv: -kv[1]["mem_req"])[:10]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
 
     def _plot(ax, top, req_key, avg_key, unit, color_used, color_idle, title):
+        """Draw one capacity panel (CPU or Mem) with used + idle stacked bars."""
         names = [ns for ns, _ in top]
         used = np.array([v[avg_key] for _, v in top])
         req = np.array([v[req_key] for _, v in top])
         idle = np.maximum(req - used, 0)
         y = np.arange(len(names))
-        ax.barh(y, used, color=color_used, label='Used (avg)')
-        ax.barh(y, idle, left=used, color=color_idle, alpha=0.6,
-                label='Requested but idle')
+        ax.barh(y, used, color=color_used, label="Used (avg)")
+        ax.barh(y, idle, left=used, color=color_idle, alpha=0.6, label="Requested but idle")
         ax.set_yticks(y)
         ax.set_yticklabels(names, fontsize=9)
         ax.invert_yaxis()
         ax.set_xlabel(unit, fontsize=11)
-        ax.set_title(title, fontsize=12, fontweight='bold')
-        ax.legend(loc='lower right')
-        ax.grid(axis='x', alpha=0.3)
+        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.legend(loc="lower right")
+        ax.grid(axis="x", alpha=0.3)
         # Annotate utilization % on each row
         for i, (u, r) in enumerate(zip(used, req)):
             if r > 0:
                 pct = (u / r) * 100
-                ax.text(r, i, f' {pct:.0f}%', va='center', fontsize=8, alpha=0.7)
+                ax.text(r, i, f" {pct:.0f}%", va="center", fontsize=8, alpha=0.7)
 
-    _plot(ax1, cpu_top, "cpu_req", "cpu_avg",
-          "CPU (millicores)", "#1f77b4", "#aec7e8",
-          "Top 10 Namespaces — CPU Capacity")
-    _plot(ax2, mem_top, "mem_req", "mem_avg",
-          "Memory (Mi)", "#2ca02c", "#98df8a",
-          "Top 10 Namespaces — Memory Capacity")
+    _plot(
+        ax1, cpu_top, "cpu_req", "cpu_avg", "CPU (millicores)", "#1f77b4", "#aec7e8", "Top 10 Namespaces — CPU Capacity"
+    )
+    _plot(
+        ax2, mem_top, "mem_req", "mem_avg", "Memory (Mi)", "#2ca02c", "#98df8a", "Top 10 Namespaces — Memory Capacity"
+    )
 
     plt.tight_layout()
-    plt.savefig(output_path / '8_fleet_capacity.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "8_fleet_capacity.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 8_fleet_capacity.png")
     return True
@@ -591,6 +643,7 @@ def _pattern_group_impact(analyses: Sequence, output_path: Path) -> bool:
     priority. Surfaces 'fix the chart once, resolve N issues'."""
     import matplotlib.pyplot as plt
     import numpy as np
+
     from k8s_advisor.aggregations import build_pattern_groups
 
     groups = build_pattern_groups(analyses, min_size=3)
@@ -601,35 +654,37 @@ def _pattern_group_impact(analyses: Sequence, output_path: Path) -> bool:
     groups = sorted(groups, key=lambda g: -len(g.workloads))[:12]
     labels = [f"{g.namespace}/{g.prefix}-*" for g in groups]
     sizes = [len(g.workloads) for g in groups]
-    color_map = {"P0": "#ff4444", "P1": "#ff8844",
-                 "P2": "#ffdd44", "P3": "#44ff44"}
+    color_map = {"P0": "#ff4444", "P1": "#ff8844", "P2": "#ffdd44", "P3": "#44ff44"}
     colors = [color_map.get(g.priority, "#888888") for g in groups]
 
-    fig, ax = plt.subplots(figsize=(12, max(5, 0.5 * len(labels) + 1)))
+    _fig, ax = plt.subplots(figsize=(12, max(5, 0.5 * len(labels) + 1)))
     y = np.arange(len(labels))
-    ax.barh(y, sizes, color=colors, edgecolor='black', linewidth=0.3)
+    ax.barh(y, sizes, color=colors, edgecolor="black", linewidth=0.3)
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=9)
     ax.invert_yaxis()
-    ax.set_xlabel('Number of workloads in group', fontsize=11)
-    ax.set_title('Pattern Groups — Fix the Chart, Resolve N Tickets',
-                 fontsize=13, fontweight='bold')
-    ax.grid(axis='x', alpha=0.3)
+    ax.set_xlabel("Number of workloads in group", fontsize=11)
+    ax.set_title("Pattern Groups — Fix the Chart, Resolve N Tickets", fontsize=13, fontweight="bold")
+    ax.grid(axis="x", alpha=0.3)
 
     # Annotate priority and count.
     for i, (g, n) in enumerate(zip(groups, sizes)):
-        ax.text(n, i, f' {g.priority} × {n}', va='center', fontsize=9, alpha=0.85)
+        ax.text(n, i, f" {g.priority} × {n}", va="center", fontsize=9, alpha=0.85)
 
     from matplotlib.patches import Patch
-    ax.legend(handles=[
-        Patch(facecolor='#ff4444', label='P0'),
-        Patch(facecolor='#ff8844', label='P1'),
-        Patch(facecolor='#ffdd44', label='P2'),
-        Patch(facecolor='#44ff44', label='P3'),
-    ], loc='lower right')
+
+    ax.legend(
+        handles=[
+            Patch(facecolor="#ff4444", label="P0"),
+            Patch(facecolor="#ff8844", label="P1"),
+            Patch(facecolor="#ffdd44", label="P2"),
+            Patch(facecolor="#44ff44", label="P3"),
+        ],
+        loc="lower right",
+    )
 
     plt.tight_layout()
-    plt.savefig(output_path / '9_pattern_group_impact.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "9_pattern_group_impact.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 9_pattern_group_impact.png")
     return True
@@ -650,11 +705,7 @@ def _p95_vs_request(analyses: Sequence, output_path: Path) -> bool:
 
     # We can plot a workload as long as it has a P95 + request on at least
     # one axis. Missing axis is plotted at the floor (0).
-    candidates = [
-        a for a in analyses
-        if (a.cpu_p95 > 0 and a.cpu_request > 0)
-        or (a.mem_p95 > 0 and a.mem_request > 0)
-    ]
+    candidates = [a for a in analyses if (a.cpu_p95 > 0 and a.cpu_request > 0) or (a.mem_p95 > 0 and a.mem_request > 0)]
     # Need a meaningful sample
     if len(candidates) < 5 or len(candidates) < 0.10 * len(analyses):
         return False
@@ -671,51 +722,56 @@ def _p95_vs_request(analyses: Sequence, output_path: Path) -> bool:
         if cr > 1.5 or mr > 1.5 or (cr < 0.2 and mr < 0.2):
             annotated.append((cr, mr, _short_label(a, 30), a))
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    _fig, ax = plt.subplots(figsize=(12, 8))
     colors = []
     for cr, mr in zip(cpu_ratio, mem_ratio):
         if cr > 1 or mr > 1:
-            colors.append('red')         # under-provisioned (real risk)
+            colors.append("red")  # under-provisioned (real risk)
         elif cr < 0.3 and mr < 0.3:
-            colors.append('coral')       # waste
+            colors.append("coral")  # waste
         elif 0.5 <= cr <= 1 and 0.5 <= mr <= 1:
-            colors.append('green')       # well-sized
+            colors.append("green")  # well-sized
         else:
-            colors.append('gold')        # acceptable
+            colors.append("gold")  # acceptable
 
-    ax.scatter(cpu_ratio, mem_ratio, c=colors, alpha=0.6, s=80,
-               edgecolors='black', linewidths=0.3)
+    ax.scatter(cpu_ratio, mem_ratio, c=colors, alpha=0.6, s=80, edgecolors="black", linewidths=0.3)
 
     # Reference lines.
-    ax.axvline(x=1.0, color='red', linestyle='--', alpha=0.4, label='P95 = request')
-    ax.axhline(y=1.0, color='red', linestyle='--', alpha=0.4)
-    ax.axvline(x=0.3, color='gray', linestyle=':', alpha=0.4)
-    ax.axhline(y=0.3, color='gray', linestyle=':', alpha=0.4)
+    ax.axvline(x=1.0, color="red", linestyle="--", alpha=0.4, label="P95 = request")
+    ax.axhline(y=1.0, color="red", linestyle="--", alpha=0.4)
+    ax.axvline(x=0.3, color="gray", linestyle=":", alpha=0.4)
+    ax.axhline(y=0.3, color="gray", linestyle=":", alpha=0.4)
 
     for cr, mr, label, _ in annotated[:20]:
-        ax.annotate(label, (min(cr, 3.0), min(mr, 3.0)),
-                    xytext=(5, 5), textcoords='offset points',
-                    fontsize=7, alpha=0.85)
+        ax.annotate(
+            label, (min(cr, 3.0), min(mr, 3.0)), xytext=(5, 5), textcoords="offset points", fontsize=7, alpha=0.85
+        )
 
-    ax.set_xlabel('CPU P95 / request', fontsize=12)
-    ax.set_ylabel('Memory P95 / request', fontsize=12)
-    ax.set_title('P95 vs Request — Real Risk vs Real Waste\n'
-                 '(>1.0 = throttle/OOM risk; <0.3 = clear waste)',
-                 fontsize=12, fontweight='bold')
+    ax.set_xlabel("CPU P95 / request", fontsize=12)
+    ax.set_ylabel("Memory P95 / request", fontsize=12)
+    ax.set_title(
+        "P95 vs Request — Real Risk vs Real Waste\n(>1.0 = throttle/OOM risk; <0.3 = clear waste)",
+        fontsize=12,
+        fontweight="bold",
+    )
     ax.set_xlim(left=-0.05, right=3.1)
     ax.set_ylim(bottom=-0.05, top=3.1)
     ax.grid(True, alpha=0.3)
 
     from matplotlib.patches import Patch
-    ax.legend(handles=[
-        Patch(facecolor='red', label='Under-provisioned (risk)'),
-        Patch(facecolor='gold', label='Acceptable'),
-        Patch(facecolor='green', label='Well-sized (50–100%)'),
-        Patch(facecolor='coral', label='Waste (<30% on both)'),
-    ], loc='upper right')
+
+    ax.legend(
+        handles=[
+            Patch(facecolor="red", label="Under-provisioned (risk)"),
+            Patch(facecolor="gold", label="Acceptable"),
+            Patch(facecolor="green", label="Well-sized (50–100%)"),
+            Patch(facecolor="coral", label="Waste (<30% on both)"),
+        ],
+        loc="upper right",
+    )
 
     plt.tight_layout()
-    plt.savefig(output_path / '10_p95_vs_request.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_path / "10_p95_vs_request.png", dpi=150, bbox_inches="tight")
     plt.close()
     print("  ✓ Generated 10_p95_vs_request.png")
     return True

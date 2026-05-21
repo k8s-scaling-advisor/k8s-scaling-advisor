@@ -1,14 +1,15 @@
 """Unit tests for priority and scaling approach classification."""
-from k8s_advisor.analyzer.models import (
-    DeploymentAnalysis,
-    Priority,
-    ScalingApproach,
-    IssueType,
-)
+
 from k8s_advisor.analyzer.classifier import (
+    _check_vpa_support,
     determine_priority,
     determine_scaling_approach,
-    _check_vpa_support,
+)
+from k8s_advisor.analyzer.models import (
+    DeploymentAnalysis,
+    IssueType,
+    Priority,
+    ScalingApproach,
 )
 
 

@@ -29,17 +29,27 @@ The script applies the strict OSS defaults below.
 |---|---|
 | Branch name pattern | `main` |
 | Require a pull request before merging | ✅ |
-| Required approving reviews | **1** |
+| Required approving reviews | **0** (see solo-maintainer note below) |
 | Dismiss stale pull request approvals when new commits are pushed | ✅ |
-| Require review from Code Owners | ✅ |
+| Require review from Code Owners | ❌ (would deadlock with 0 approvals) |
 | Require status checks to pass before merging | ✅ |
 | Require branches to be up to date before merging | ✅ |
-| Required status checks | `tests (3.9)`, `tests (3.10)`, `tests (3.11)`, `tests (3.12)`, `tests (3.13)`, `lint`, `CodeQL` |
+| Required status checks | `tests (3.9)`, `tests (3.10)`, `tests (3.11)`, `tests (3.12)`, `tests (3.13)`, `lint`, `CodeQL (python)` |
 | Require conversation resolution before merging | ✅ |
-| Require signed commits | ✅ (recommended) |
+| Require signed commits | ✅ |
 | Require linear history | ✅ |
-| Do not allow bypassing the above settings | ✅ |
+| Do not allow bypassing the above settings (`enforce_admins`) | ✅ |
 | Restrict who can push to matching branches | _empty list_ — nobody can push directly |
+
+### Why 0 required reviews on a solo project
+
+GitHub does not allow a PR author to approve their own PR (HTTP 422 from the
+review API). With `required_approving_review_count: 1` and one maintainer,
+every PR deadlocks at "merge blocked: 1 approving review needed" with no
+way to satisfy it. Setting `required_approving_review_count: 0` keeps every
+other gate (CI must pass, signed commits, linear history, no force-push,
+no direct push to `main`) — only the human-approval requirement is dropped.
+When you add a co-maintainer later, flip this back to 1 in the UI.
 
 ---
 

@@ -1,22 +1,20 @@
 """Issue detection logic for deployments and statefulsets."""
 
-from typing import List
-
-from .models import DeploymentAnalysis, IssueType
 from ..constants import (
     CPU_OVER_REQUESTED_THRESHOLD,
     CPU_UNDER_REQUESTED_THRESHOLD,
     MEM_OVER_REQUESTED_THRESHOLD,
-    MEM_UNDER_REQUESTED_THRESHOLD,
-    UNSTABLE_RESTART_THRESHOLD,
-    UNSTABLE_RESTART_RATE_THRESHOLD,
-    OOM_RISK_THRESHOLD,
     MEM_SATURATION_LIMIT_THRESHOLD,
+    MEM_UNDER_REQUESTED_THRESHOLD,
     MEMORY_SCALABLE_PATTERNS,
+    OOM_RISK_THRESHOLD,
+    UNSTABLE_RESTART_RATE_THRESHOLD,
+    UNSTABLE_RESTART_THRESHOLD,
 )
+from .models import DeploymentAnalysis, IssueType
 
 
-def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
+def detect_issues(analysis: DeploymentAnalysis) -> list[IssueType]:
     """Detect all resource and stability issues with a workload.
 
     This function performs comprehensive issue detection including:
@@ -42,7 +40,7 @@ def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
         - Memory saturation uses TWO thresholds: >200% of request OR >90% of limit
         - OOM_KILLED takes precedence over MEM_SATURATION (don't double-flag)
     """
-    issues: List[IssueType] = []
+    issues: list[IssueType] = []
 
     # ─────────────────────────────────────────────────────────────────────────
     # Check for missing metrics (no data at all)
@@ -65,10 +63,9 @@ def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
     # 1. Usage exceeds limit (direct throttling)
     # 2. Usage >300% of request with low limit (<2x request) - indirect throttling
     if analysis.cpu_limit_m > 0:
-        if analysis.avg_cpu_usage_m > analysis.cpu_limit_m:
-            issues.append(IssueType.CPU_THROTTLED)
-        elif (analysis.cpu_usage_percent > 300 and
-              analysis.cpu_limit_m < analysis.cpu_request_m * 2):
+        if analysis.avg_cpu_usage_m > analysis.cpu_limit_m or (
+            analysis.cpu_usage_percent > 300 and analysis.cpu_limit_m < analysis.cpu_request_m * 2
+        ):
             issues.append(IssueType.CPU_THROTTLED)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -101,10 +98,10 @@ def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
     #
     # IMPORTANT: Only flag if NOT already flagged as OOM_KILLED
     if IssueType.OOM_KILLED not in issues:
-        if analysis.mem_usage_percent > OOM_RISK_THRESHOLD:
-            issues.append(IssueType.MEM_SATURATION)
-        elif (analysis.mem_limit_mi > 0 and
-              analysis.avg_mem_usage_mi > (analysis.mem_limit_mi * (MEM_SATURATION_LIMIT_THRESHOLD / 100))):
+        if analysis.mem_usage_percent > OOM_RISK_THRESHOLD or (
+            analysis.mem_limit_mi > 0
+            and analysis.avg_mem_usage_mi > (analysis.mem_limit_mi * (MEM_SATURATION_LIMIT_THRESHOLD / 100))
+        ):
             issues.append(IssueType.MEM_SATURATION)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -128,8 +125,7 @@ def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
         # Rate-based threshold: >2 restarts/day is concerning
         # (only evaluated if total_restarts > 0 per above check)
         issues.append(IssueType.UNSTABLE)
-    elif (analysis.restart_rate_per_day == 0 and
-          analysis.total_restarts > UNSTABLE_RESTART_THRESHOLD):
+    elif analysis.restart_rate_per_day == 0 and analysis.total_restarts > UNSTABLE_RESTART_THRESHOLD:
         # Fallback: Use count-based threshold when rate is unavailable
         # This handles missing Prometheus data with high kubectl restart counts
         issues.append(IssueType.UNSTABLE)
@@ -138,16 +134,14 @@ def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
     # P2 Issue: Over-requested CPU
     # ─────────────────────────────────────────────────────────────────────────
     # <50% CPU usage = wasteful over-provisioning
-    if (analysis.cpu_request_m > 0 and
-        analysis.cpu_usage_percent < CPU_OVER_REQUESTED_THRESHOLD):
+    if analysis.cpu_request_m > 0 and analysis.cpu_usage_percent < CPU_OVER_REQUESTED_THRESHOLD:
         issues.append(IssueType.CPU_OVER_REQUESTED)
 
     # ─────────────────────────────────────────────────────────────────────────
     # P2 Issue: Over-requested memory
     # ─────────────────────────────────────────────────────────────────────────
     # <50% memory usage = wasteful over-provisioning
-    if (analysis.mem_request_mi > 0 and
-        analysis.mem_usage_percent < MEM_OVER_REQUESTED_THRESHOLD):
+    if analysis.mem_request_mi > 0 and analysis.mem_usage_percent < MEM_OVER_REQUESTED_THRESHOLD:
         issues.append(IssueType.MEM_OVER_REQUESTED)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -155,8 +149,7 @@ def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
     # ─────────────────────────────────────────────────────────────────────────
     # >85% CPU usage = needs more resources
     # NOTE: This is P2 not P1 because if no throttling, app is functionally stable
-    if (analysis.cpu_request_m > 0 and
-        analysis.cpu_usage_percent > CPU_UNDER_REQUESTED_THRESHOLD):
+    if analysis.cpu_request_m > 0 and analysis.cpu_usage_percent > CPU_UNDER_REQUESTED_THRESHOLD:
         issues.append(IssueType.CPU_UNDER_REQUESTED)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -164,8 +157,7 @@ def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
     # ─────────────────────────────────────────────────────────────────────────
     # >85% memory usage = needs more resources
     # NOTE: This is P2 not P1 because if no OOM kills, app is functionally stable
-    if (analysis.mem_request_mi > 0 and
-        analysis.mem_usage_percent > MEM_UNDER_REQUESTED_THRESHOLD):
+    if analysis.mem_request_mi > 0 and analysis.mem_usage_percent > MEM_UNDER_REQUESTED_THRESHOLD:
         issues.append(IssueType.MEM_UNDER_REQUESTED)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -186,9 +178,7 @@ def detect_issues(analysis: DeploymentAnalysis) -> List[IssueType]:
     # DETECTION: HIGH memory volatility + matches known memory-scalable pattern
     if analysis.mem_volatility == "HIGH":
         deployment_lower = analysis.deployment.lower()
-        is_memory_bound = any(
-            pattern in deployment_lower for pattern in MEMORY_SCALABLE_PATTERNS
-        )
+        is_memory_bound = any(pattern in deployment_lower for pattern in MEMORY_SCALABLE_PATTERNS)
         if is_memory_bound:
             issues.append(IssueType.MEMORY_HPA_CANDIDATE)
         # Non-memory-bound apps with HIGH volatility are likely memory leaks

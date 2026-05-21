@@ -1,10 +1,11 @@
 """Unit tests for analyzer data models."""
+
 from k8s_advisor.analyzer.models import (
     DeploymentAnalysis,
-    Priority,
-    ScalingApproach,
     IssueType,
+    Priority,
     ResourceRecommendation,
+    ScalingApproach,
 )
 
 
@@ -69,7 +70,7 @@ class TestResourceRecommendation:
             memory_request="256Mi",
             memory_limit="512Mi",
             rationale="Right-sized based on P95 usage",
-            requires_manual_action=True
+            requires_manual_action=True,
         )
         assert rec.cpu_request == "125m"
         assert rec.cpu_limit == "250m"
@@ -235,14 +236,14 @@ class TestDeploymentAnalysis:
 
         result = analysis.to_dict()
 
-        assert result['priority'] == "P3"
-        assert result['issues'] == ["CPU_OVER_REQUESTED", "MEM_OVER_REQUESTED"]
-        assert result['scaling_approach'] == "HPA"
-        assert result['cluster'] == "test-cluster"
-        assert result['replicas'] == 3
+        assert result["priority"] == "P3"
+        assert result["issues"] == ["CPU_OVER_REQUESTED", "MEM_OVER_REQUESTED"]
+        assert result["scaling_approach"] == "HPA"
+        assert result["cluster"] == "test-cluster"
+        assert result["replicas"] == 3
 
     def test_to_dict_empty_issues(self):
         """Test to_dict with empty issues list."""
         analysis = self.create_minimal_analysis()
         result = analysis.to_dict()
-        assert result['issues'] == []
+        assert result["issues"] == []

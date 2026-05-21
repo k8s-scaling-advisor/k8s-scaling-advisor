@@ -1,7 +1,7 @@
 """Priority and scaling approach classification logic."""
 
-from .models import DeploymentAnalysis, Priority, ScalingApproach, IssueType
 from ..constants import EXCLUDED_DEPLOYMENTS
+from .models import DeploymentAnalysis, IssueType, Priority, ScalingApproach
 
 
 def determine_priority(analysis: DeploymentAnalysis) -> Priority:
@@ -85,10 +85,7 @@ def determine_priority(analysis: DeploymentAnalysis) -> Priority:
     return Priority.P3
 
 
-def determine_scaling_approach(
-    analysis: DeploymentAnalysis,
-    k8s_version: str = "1.33"
-) -> ScalingApproach:
+def determine_scaling_approach(analysis: DeploymentAnalysis, k8s_version: str = "1.33") -> ScalingApproach:
     """Determine appropriate scaling approach (HPA, VPA, Manual, or None).
 
     Scaling Approach Decision Tree:
@@ -140,8 +137,7 @@ def determine_scaling_approach(
     # 1. Excluded workloads → NONE
     # ─────────────────────────────────────────────────────────────────────────
     # Example: Logstash (JVM-based, plugin-constrained scaling)
-    if any(excluded in analysis.deployment.lower()
-           for excluded in EXCLUDED_DEPLOYMENTS):
+    if any(excluded in analysis.deployment.lower() for excluded in EXCLUDED_DEPLOYMENTS):
         return ScalingApproach.NONE
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -202,9 +198,8 @@ def determine_scaling_approach(
     # 7. High utilization + multi-replica → HPA
     # ─────────────────────────────────────────────────────────────────────────
     # >85% CPU or memory usage indicates need for horizontal scaling
-    if (analysis.cpu_usage_percent > 85 or analysis.mem_usage_percent > 85):
-        if analysis.replicas > 1:
-            return ScalingApproach.HPA
+    if (analysis.cpu_usage_percent > 85 or analysis.mem_usage_percent > 85) and analysis.replicas > 1:
+        return ScalingApproach.HPA
 
     # ─────────────────────────────────────────────────────────────────────────
     # 8. Multi-replica (≥3) → HPA
@@ -218,8 +213,7 @@ def determine_scaling_approach(
     # 9. Over-requested resources → VPA or MANUAL
     # ─────────────────────────────────────────────────────────────────────────
     # VPA can right-size over-provisioned resources automatically
-    if (IssueType.CPU_OVER_REQUESTED in analysis.issues or
-        IssueType.MEM_OVER_REQUESTED in analysis.issues):
+    if IssueType.CPU_OVER_REQUESTED in analysis.issues or IssueType.MEM_OVER_REQUESTED in analysis.issues:
         if supports_in_place_vpa:
             return ScalingApproach.VPA
         else:
@@ -245,8 +239,8 @@ def _check_vpa_support(version: str) -> bool:
     try:
         # Extract major.minor version
         # Handle formats like "1.33", "1.33.0", "v1.33.2"
-        version_clean = version.strip().lower().replace('v', '')
-        parts = version_clean.split('.')
+        version_clean = version.strip().lower().replace("v", "")
+        parts = version_clean.split(".")
         if len(parts) >= 2:
             major = int(parts[0])
             minor = int(parts[1])
