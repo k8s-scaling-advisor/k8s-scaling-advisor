@@ -7,6 +7,7 @@ where an interpolated path containing whitespace or shell metacharacters
 gets parsed as multiple arguments.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -66,7 +67,7 @@ def main():
 
     project_root = Path(__file__).parent.parent
     main_py = str(project_root / "main.py")
-    venv_python = str(project_root / "venv" / "bin" / "python3")
+    venv_python = os.environ.get("K8S_ADVISOR_PYTHON", sys.executable)
 
     tests_passed = 0
     tests_failed = 0
@@ -103,7 +104,7 @@ def main():
     # Test 3: Version/info
     print("\n3. Script Info")
     tests = [
-        ("Syntax check", ["python3", "-m", "py_compile", main_py], None),
+        ("Syntax check", [venv_python, "-m", "py_compile", main_py], None),
     ]
 
     for name, cmd, expected in tests:

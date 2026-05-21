@@ -334,7 +334,7 @@ def _top_under_requested(analyses: Sequence, output_path: Path) -> bool:
     cpu_top = sorted(cpu_raises, key=lambda x: -x[1])[:10]
     mem_top = sorted(mem_raises, key=lambda x: -x[1])[:10]
 
-    (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))[1]
+    _fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
     def _draw(ax, top, color, xlabel, title):
         """Draw a horizontal bar chart on `ax` for one panel of graph 3."""

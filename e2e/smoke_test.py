@@ -108,7 +108,7 @@ def main():
 
     project_root = Path(__file__).parent.parent
     main_py = str(project_root / "main.py")
-    venv_python = str(project_root / "venv" / "bin" / "python3")
+    venv_python = os.environ.get("K8S_ADVISOR_PYTHON", sys.executable)
     snippet_env = {"PROJECT_ROOT": str(project_root)}
 
     tests_passed = 0

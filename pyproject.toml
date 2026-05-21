@@ -18,8 +18,6 @@ ignore = [
     "E501",    # line too long (handled by formatter)
     "S101",    # use of assert — pytest tests rely on assert
     "S311",    # random for jitter in retry backoff (not crypto)
-    "S603",    # subprocess call: review with shell=False fix already in place
-    "S607",    # starting process with partial path — kubectl/gpg/git are PATH-resolved by design
     "SIM108",  # ternary instead of if-else — situational; readability often wins
     # ── Unicode diagnostics ───────────────────────────────────────────────
     # Report templates, documentation, and admin-readable strings use Unicode
@@ -44,6 +42,10 @@ ignore = [
 # access-mode probe) intentionally swallow exceptions — the function
 # returns a sentinel that callers handle.
 "k8s_advisor/collector/kubernetes.py" = ["S110", "S112"]
+# prometheus.py: subprocess calls invoke kubectl/gpg/git which are
+# PATH-resolved by design (S607) and use shell=False with argument lists
+# (S603 is the bandit "review" warning for any subprocess.run call).
+"k8s_advisor/collector/prometheus.py" = ["S603", "S607"]
 
 [tool.ruff.format]
 quote-style = "double"
