@@ -34,24 +34,29 @@ def _fp(**overrides):
 
 
 def test_fingerprint_is_stable_for_identical_inputs():
+    """Same inputs hash to the same fingerprint across calls."""
     assert _fp() == _fp()
 
 
 def test_fingerprint_changes_when_namespace_changes():
+    """Identity field (namespace) changes alter the fingerprint."""
     assert _fp() != _fp(namespace="other")
 
 
 def test_fingerprint_changes_when_recommendation_changes():
+    """CPU or memory recommendation changes alter the fingerprint."""
     assert _fp() != _fp(recommended_cpu="600m")
     assert _fp() != _fp(recommended_mem="512Mi")
 
 
 def test_fingerprint_changes_when_priority_or_scaling_changes():
+    """Priority or scaling-approach changes alter the fingerprint."""
     assert _fp() != _fp(priority="P0")
     assert _fp() != _fp(scaling_approach="HPA")
 
 
 def test_fingerprint_uses_nul_delimiter_so_fields_cant_collide():
+    """NUL delimiter prevents adjacent-field concatenation collisions."""
     # `name + '' + space` should not collide with `name + 'space'`.
     a = fingerprint(
         namespace="a", deployment="b", priority="P", scaling_approach="X", recommended_cpu="1m", recommended_mem="1Mi"
@@ -68,6 +73,7 @@ def test_fingerprint_uses_nul_delimiter_so_fields_cant_collide():
 
 
 def test_fingerprint_returns_short_hex():
+    """Fingerprint is exactly 16 lowercase hex chars."""
     fp = _fp()
     assert len(fp) == 16
     assert all(c in "0123456789abcdef" for c in fp)
@@ -79,23 +85,26 @@ def test_fingerprint_returns_short_hex():
 
 
 def test_load_state_returns_empty_when_dir_missing(tmp_path: Path):
+    """Missing state directory yields fresh empty state, not an error."""
     state = load_state(tmp_path / "doesnt-exist")
     assert state == {"schema_version": STATE_SCHEMA_VERSION, "fingerprints": {}}
 
 
 def test_load_state_returns_empty_when_file_missing(tmp_path: Path):
-    # Directory exists but file doesn't.
+    """Missing state file (dir exists) yields fresh empty state."""
     state = load_state(tmp_path)
     assert state["fingerprints"] == {}
 
 
 def test_load_state_returns_empty_on_corrupt_json(tmp_path: Path):
+    """Unparseable JSON falls back to empty state instead of raising."""
     (tmp_path / STATE_FILENAME).write_text("not-json{", encoding="utf-8")
     state = load_state(tmp_path)
     assert state["fingerprints"] == {}
 
 
 def test_load_state_returns_empty_on_schema_mismatch(tmp_path: Path):
+    """Unknown schema version is treated as a hard reset, not a partial read."""
     (tmp_path / STATE_FILENAME).write_text(
         json.dumps({"schema_version": 999, "fingerprints": {"abc": {"count": 1}}}),
         encoding="utf-8",
@@ -105,6 +114,7 @@ def test_load_state_returns_empty_on_schema_mismatch(tmp_path: Path):
 
 
 def test_save_state_round_trips(tmp_path: Path):
+    """save_state -> load_state preserves the full state shape."""
     state = {
         "schema_version": STATE_SCHEMA_VERSION,
         "fingerprints": {
@@ -117,6 +127,7 @@ def test_save_state_round_trips(tmp_path: Path):
 
 
 def test_save_state_creates_directory(tmp_path: Path):
+    """save_state creates intermediate directories that don't exist yet."""
     nested = tmp_path / "a" / "b"
     save_state(nested, {"schema_version": STATE_SCHEMA_VERSION, "fingerprints": {}})
     assert (nested / STATE_FILENAME).exists()
@@ -128,6 +139,7 @@ def test_save_state_creates_directory(tmp_path: Path):
 
 
 def test_merge_run_adds_new_fingerprints():
+    """Brand-new fingerprints land with count=1 and matching first/last_seen."""
     prior = {"schema_version": STATE_SCHEMA_VERSION, "fingerprints": {}}
     out = merge_run(prior, ["abc", "def"])
     assert set(out["fingerprints"].keys()) == {"abc", "def"}
@@ -137,6 +149,7 @@ def test_merge_run_adds_new_fingerprints():
 
 
 def test_merge_run_bumps_count_for_existing_fingerprint():
+    """Re-seeing a fingerprint increments count and refreshes last_seen only."""
     prior = {
         "schema_version": STATE_SCHEMA_VERSION,
         "fingerprints": {
@@ -151,6 +164,7 @@ def test_merge_run_bumps_count_for_existing_fingerprint():
 
 
 def test_merge_run_preserves_unobserved_fingerprints():
+    """Prior fingerprints absent from this run are kept untouched."""
     # A fingerprint in prior but not in this run should stay (workload may
     # have been temporarily skipped).
     prior = {
@@ -166,6 +180,7 @@ def test_merge_run_preserves_unobserved_fingerprints():
 
 
 def test_merge_run_drops_entries_older_than_one_year():
+    """Entries past STATE_GC_DAYS are pruned on the next merge."""
     # last_seen well over a year ago → GC'd on next merge.
     prior = {
         "schema_version": STATE_SCHEMA_VERSION,
@@ -188,6 +203,7 @@ def test_merge_run_drops_entries_older_than_one_year():
 
 
 def test_load_state_drops_non_dict_entries(tmp_path: Path):
+    """Entries whose value is not a dict are silently dropped."""
     # An entry that's a bare string (not a dict) must be dropped, not
     # propagated to merge_run() where it would crash on `.get(...)`.
     (tmp_path / STATE_FILENAME).write_text(
@@ -214,6 +230,7 @@ def test_load_state_drops_non_dict_entries(tmp_path: Path):
 
 
 def test_load_state_drops_entries_missing_timestamps(tmp_path: Path):
+    """Entries missing or with non-string first/last_seen are dropped."""
     (tmp_path / STATE_FILENAME).write_text(
         json.dumps(
             {
@@ -237,6 +254,7 @@ def test_load_state_drops_entries_missing_timestamps(tmp_path: Path):
 
 
 def test_load_state_coerces_bad_count_to_one(tmp_path: Path):
+    """Non-numeric or negative counts are clamped to 1, entry is kept."""
     (tmp_path / STATE_FILENAME).write_text(
         json.dumps(
             {
