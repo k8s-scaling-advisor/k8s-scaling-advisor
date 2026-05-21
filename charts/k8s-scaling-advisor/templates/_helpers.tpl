@@ -48,13 +48,19 @@ template render rather than silently falling back to `:latest`.
 Reproducibility / rollback safety > convenience.
 */ -}}
 {{- define "k8s-scaling-advisor.uploaderImage" -}}
+{{- $kind := .Values.uploader.kind -}}
+{{- $valid := list "s3" "slack" "http" -}}
+{{- if not (has $kind $valid) -}}
+  {{- fail (printf "uploader.kind must be one of %v (got %q). The CronJob template only handles those values; an invalid kind would silently produce a no-op uploader." $valid $kind) -}}
+{{- end -}}
 {{- $repo := .Values.uploader.image.repository -}}
 {{- $tag := .Values.uploader.image.tag -}}
 {{- if not $repo -}}
-  {{- if eq .Values.uploader.kind "s3" -}}
+  {{- if eq $kind "s3" -}}
     {{- $repo = "amazon/aws-cli" -}}
     {{- if not $tag }}{{- $tag = "2.17.0" -}}{{- end -}}
   {{- else -}}
+    {{- /* slack and http both use curlimages/curl */ -}}
     {{- $repo = "curlimages/curl" -}}
     {{- if not $tag }}{{- $tag = "8.10.1" -}}{{- end -}}
   {{- end -}}

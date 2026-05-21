@@ -17,12 +17,22 @@ WORKDIR /app
 # No kubectl, no curl: discovery and port-forwarding are handled by the
 # `kubernetes` Python client (see k8s_advisor/collector/prometheus.py).
 # Reduces image size and the supply-chain surface to just Python deps.
+#
+# Vuln-scanning strategy: Grype runs at release-time as a strict gate
+# (release-image.yml fails on any fixed HIGH/CRITICAL) and on a daily
+# cron (.github/workflows/cve-scan.yml) against the published image —
+# new fixed HIGH/CRITICAL findings post-release open a tracking issue
+# instead of blocking, since we don't control the upstream rebuild
+# cadence. See the comment headers in those two workflow files for the
+# rationale.
 
-COPY requirements.txt ./requirements.txt
-RUN pip install -r requirements.txt
+COPY requirements.txt requirements-viz.txt ./
+RUN pip install -r requirements.txt -r requirements-viz.txt
 
 COPY . .
-RUN pip install .
+# Install with [viz] so the `--graphs` CLI flag works without an
+# additional pip step at runtime.
+RUN pip install ".[viz]"
 
 # UID 1000 matches `securityContext.runAsUser` in the Helm chart so volume
 # permissions line up at runtime.

@@ -50,7 +50,11 @@ always reflects the current branch.
 The examples below show both invocations. Anywhere you see `./charts/...`
 works, the equivalent `oci://...` works too, and vice versa.
 
-### Namespace-scoped deployment (default)
+### Cluster-wide deployment (default)
+
+The advisor is a cluster-admin tool — its job is to look at *other* workloads
+to recommend resource changes. Scanning only its own namespace is rarely
+useful, so the chart defaults to cluster-wide RBAC + `--all-namespaces`.
 
 From the OCI artifact (pinned release):
 
@@ -74,17 +78,13 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
 
 This creates:
 - `ServiceAccount`
-- namespace-scoped `Role` + `RoleBinding`
-- `CronJob` running `report -n <release-namespace> --format md,json` daily
+- `ClusterRole` + `ClusterRoleBinding` (read-only across the cluster)
+- `CronJob` running `report --all-namespaces --format md,json --graphs` daily
 
-The release namespace is the only namespace the advisor can read. This
-matches the project guideline that the advisor must work with
-namespace-scoped permissions (no cluster-admin required).
+### Namespace-scoped deployment
 
-### Cluster-wide deployment
-
-When you want fleet visibility, flip both `rbac.clusterWide=true` AND
-the args to `--all-namespaces`. Either chart source works — pick one:
+For paranoid / single-tenant environments, flip BOTH `rbac.clusterWide=false`
+AND the args to a specific namespace:
 
 ```bash
 # OCI (pinned release)
@@ -94,27 +94,16 @@ helm upgrade --install k8s-scaling-advisor \
   --namespace platform-observability \
   --create-namespace \
   --set image.digest=sha256:<published-digest> \
-  --set rbac.clusterWide=true \
+  --set rbac.clusterWide=false \
   --set-string 'args[0]=report' \
-  --set-string 'args[1]=--all-namespaces' \
-  --set-string 'args[2]=--format' \
-  --set-string 'args[3]=md,json'
+  --set-string 'args[1]=-n' \
+  --set-string 'args[2]={{ .Release.Namespace }}' \
+  --set-string 'args[3]=--format' \
+  --set-string 'args[4]=md,json' \
+  --set-string 'args[5]=--graphs'
 ```
 
-```bash
-# Local checkout
-helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
-  --namespace platform-observability \
-  --create-namespace \
-  --set image.digest=sha256:<published-digest> \
-  --set rbac.clusterWide=true \
-  --set-string 'args[0]=report' \
-  --set-string 'args[1]=--all-namespaces' \
-  --set-string 'args[2]=--format' \
-  --set-string 'args[3]=md,json'
-```
-
-This swaps the namespace-scoped `Role` for a `ClusterRole`/`ClusterRoleBinding`.
+This swaps the `ClusterRole` for a namespace-scoped `Role`/`RoleBinding`.
 
 ## 3) Prefer immutable digests over tags
 
@@ -143,14 +132,15 @@ volume. The advisor produces:
 - `k8s-advisor_<cluster>_<timestamp>.md` — markdown summary
 - `k8s-advisor_<cluster>_<timestamp>.json` — same data, machine-readable
 
-Once the Job pod terminates, the `emptyDir` is gone. To retain the
-reports, enable the **uploader sidecar** (next section) — or copy them
-out manually before `ttlSecondsAfterFinished` expires (default 24h):
+Once the Job pod terminates, the `emptyDir` is gone. Three ways to
+keep the reports:
 
-```bash
-kubectl cp -n platform-observability \
-  <job-pod>:/app/reports/. ./local-reports/
-```
+- **Production:** enable the [uploader sidecar](#6-uploader-sidecar-s3-slack-http)
+  (next section) — ships files to S3 / Slack / HTTP before the pod exits.
+- **Ad-hoc:** [debug mode](#7-debug-mode-fetch-reports-from-a-finished-pod)
+  keeps the pod alive for 30 min so you can `kubectl debug` + `kubectl cp`.
+- **Quick check:** `kubectl logs <job-pod>` shows summary stats and report
+  paths but not the full markdown content.
 
 ## 6) Uploader sidecar (S3, Slack, HTTP)
 
@@ -235,7 +225,41 @@ helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
   --set 'uploader.http.headers.Authorization=Bearer <token>'
 ```
 
-## 5) Verify published image signature (optional, recommended)
+## 7) Debug mode: fetch reports from a finished pod
+
+A Job pod that finishes its work is reaped quickly and its `emptyDir`
+(where reports live) goes with it. For ad-hoc inspection, set
+`debug.keepAlive=true` and the main container will sleep for 30 minutes
+(configurable via `debug.keepAliveSeconds`) after writing the reports,
+so you have a window to `kubectl exec` / `kubectl cp` them out.
+
+```bash
+helm upgrade --install k8s-scaling-advisor ./charts/k8s-scaling-advisor \
+  -n platform-observability --create-namespace \
+  --set image.digest=sha256:<published-digest> \
+  --set debug.keepAlive=true
+```
+
+The pod's stdout will print `kubectl` commands with the resolved pod
+name once the analysis finishes:
+
+```bash
+# Look at the live log to find the recipe
+kubectl logs -n platform-observability -l app.kubernetes.io/name=k8s-scaling-advisor
+
+# It prints something like:
+# [debug] kubectl exec -n platform-observability k8s-advisor-...-abc12 -- ls /app/reports
+# [debug] kubectl cp -n platform-observability k8s-advisor-...-abc12:/app/reports ./local-reports
+
+# Run those, and the reports land locally.
+```
+
+This is intentionally manual — production should use the
+[uploader sidecar](#6-uploader-sidecar-s3-slack-http), which never
+needs human intervention. Debug mode is for "I want to look at one
+specific run on this cluster, right now."
+
+## 8) Verify published image signature (optional, recommended)
 
 ```bash
 cosign verify \
@@ -244,7 +268,7 @@ cosign verify \
   ghcr.io/<owner>/<repo>@sha256:<published-digest>
 ```
 
-## 6) Trigger an immediate run
+## 9) Trigger an immediate run
 
 ```bash
 kubectl create job \
@@ -253,7 +277,7 @@ kubectl create job \
   -n platform-observability
 ```
 
-## 7) Inspect results
+## 10) Inspect results
 
 ```bash
 # Recent jobs
