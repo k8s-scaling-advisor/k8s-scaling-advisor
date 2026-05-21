@@ -40,6 +40,8 @@ REQUIRED_CHECKS=(
     "tests (3.12)"
     "tests (3.13)"
     "lint"
+    "container-build"
+    "chart-lint"
     "CodeQL (python)"
 )
 
