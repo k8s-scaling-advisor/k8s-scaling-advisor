@@ -268,7 +268,7 @@ cosign verify \
   ghcr.io/<owner>/<repo>@sha256:<published-digest>
 ```
 
-## 6) Trigger an immediate run
+## 9) Trigger an immediate run
 
 ```bash
 kubectl create job \
@@ -277,7 +277,7 @@ kubectl create job \
   -n platform-observability
 ```
 
-## 7) Inspect results
+## 10) Inspect results
 
 ```bash
 # Recent jobs

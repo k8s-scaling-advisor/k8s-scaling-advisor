@@ -522,6 +522,7 @@ def start_port_forward(
 
             def _proxy(conn: socket.socket = conn) -> None:
                 """Bridge the local TCP connection to a Pod port-forward stream."""
+                pf = None
                 try:
                     pf = portforward(
                         v1.connect_get_namespaced_pod_portforward,
@@ -533,25 +534,16 @@ def start_port_forward(
                     upstream.setblocking(False)
                     conn.setblocking(False)
                     sockets = [conn, upstream]
-                    try:
-                        while not stop_event.is_set():
-                            readable, _, _ = select.select(sockets, [], [], 0.5)
-                            if not readable:
-                                continue
-                            for sock in readable:
-                                data = sock.recv(4096)
-                                if not data:
-                                    return
-                                other = upstream if sock is conn else conn
-                                other.sendall(data)
-                    finally:
-                        try:
-                            pf.close()
-                        except Exception:
-                            # PortForward.close() can fail if the upstream
-                            # stream is already torn down; we're already in a
-                            # cleanup path, so swallow and continue.
-                            pass
+                    while not stop_event.is_set():
+                        readable, _, _ = select.select(sockets, [], [], 0.5)
+                        if not readable:
+                            continue
+                        for sock in readable:
+                            data = sock.recv(4096)
+                            if not data:
+                                return
+                            other = upstream if sock is conn else conn
+                            other.sendall(data)
                 except Exception:
                     # Any failure setting up the port-forward (auth,
                     # network, pod went away) just kills this proxy
@@ -559,6 +551,17 @@ def start_port_forward(
                     # scratch via the accept loop.
                     return
                 finally:
+                    # Close pf even if creation succeeded but pf.socket()
+                    # later raised — the previous nested try/finally only
+                    # ran the close after socket() returned.
+                    if pf is not None:
+                        try:
+                            pf.close()
+                        except Exception:
+                            # PortForward.close() can fail if the upstream
+                            # stream is already torn down; we're already in
+                            # a cleanup path, so swallow and continue.
+                            pass
                     try:
                         conn.close()
                     except Exception:
