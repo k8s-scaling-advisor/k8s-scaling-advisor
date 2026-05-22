@@ -59,6 +59,14 @@ pip install -e .[viz]               # With graph support
 k8s-advisor collect -n namespace1 -n namespace2
 k8s-advisor analyze reports/k8s-advisor_*.csv --graphs
 k8s-advisor report -n namespace1 --graphs
+
+# Optional flags on analyze + report:
+#   --state-dir <dir>   Persist recommendation fingerprints across runs
+#                       so downstream tooling can suppress duplicate
+#                       Slack/Teams posts. Stored as <dir>/seen.json.
+#   --profiles <yaml>   Per-namespace policy overrides (headroom,
+#                       guardrail floors, efficiency thresholds). See
+#                       k8s_advisor/profiles.py for the schema.
 ```
 
 ### Testing
@@ -75,24 +83,58 @@ ls reports/graphs/                  # PNG files if --graphs used
 
 ## Critical Files & Their Roles
 
-### `main.py` (~620 lines)
+### `main.py` (~810 lines)
 **Purpose:** CLI orchestrator - NOT the analyzer
 - Three commands: collect, analyze, report
 - Collection logic with Prometheus auto-detection
 - Calls `k8s_advisor/simple_analyzer.py` for analysis
 - **Never modify to call external scripts** - everything must be self-contained
 
-### `k8s_advisor/simple_analyzer.py` (850+ lines)
+### `k8s_advisor/simple_analyzer.py` (~1700 lines)
 **Purpose:** Enhanced self-contained analysis engine
 - **This is the actual analyzer** - handles both Prometheus/non-Prometheus modes
 - Priority classification (P0-P3) with comprehensive rationale
 - Scaling approach determination (HPA/VPA/Manual/HPA_AFTER_FIX)
 - Resource recommendations with P95-based calculations
 - Rich Prometheus metrics usage (P50, P95, Max, StdDev, CV%)
+- Per-recommendation **confidence score** (0.0–1.0) with band (high/medium/low)
+  and reasons — see `_confidence_score()`. Surfaced on every `WorkloadAnalysis`
+  and rendered in the markdown report.
 - Executive summary with actionable insights
 - Implementation guides (HPA behavior blocks, VPA patterns)
 - Works with namespace-scoped permissions (no cluster-admin required)
+- Threads a `Profile` through to `analyze_workload(..., profile=...)` so
+  per-namespace policy overrides take effect at the per-row level.
 - Calls `visualizer.py` for optional graphs
+
+### `k8s_advisor/idempotency.py` (~165 lines)
+**Purpose:** Recommendation fingerprinting and "have we seen this before" tracking
+- Activated only when `--state-dir` is passed; otherwise the analyzer's
+  output is byte-identical to the no-state path.
+- SHA-256 fingerprint over (namespace, deployment, priority, scaling_approach,
+  recommended_cpu, recommended_mem) — truncated to 16 hex chars.
+- Persists `<state-dir>/seen.json` between runs with a schema version
+  (`STATE_SCHEMA_VERSION`). Bumping invalidates stale state.
+- GC: entries unobserved for `STATE_GC_DAYS` (365) are pruned on merge.
+- Hardened `load_state()` drops malformed entries (non-dict, missing
+  timestamps, bad counts) instead of crashing — pathological JSON in
+  the state file must not propagate to `merge_run()`.
+
+### `k8s_advisor/profiles.py` (~280 lines)
+**Purpose:** Per-namespace policy profiles loaded from `--profiles policies.yaml`
+- `Profile` dataclass holds the knobs the analyzer reads:
+  `cpu_headroom`, `mem_headroom`, `min_cpu_request_m`, `min_mem_request_mi`,
+  `min_cpu_saving_m`, `cpu_over_pct`, `cpu_under_pct`, `mem_over_pct`,
+  `mem_under_pct`. Defaults mirror `constants.py` so behavior is
+  byte-identical without `--profiles`.
+- `ProfileSet.for_namespace(ns)` resolves: namespace override → `default:` block → constants.py.
+- Strict YAML loader: unknown top-level keys, unknown knob names,
+  non-positive values, and out-of-range percentages all raise with
+  the offending field named. Falsy non-mapping shapes (`default: false`,
+  `namespaces: 0`) are explicitly rejected — the loader's "fail loud
+  on typos" promise must hold for those cases too.
+- Volatility memory step-ups take `max(profile.mem_headroom, hardcoded_floor)`
+  so a tight profile can't OOM a high-CV workload.
 
 ### `k8s_advisor/analyzer/` (modular detection — test fixtures only)
 **Purpose:** A clean, modular reimplementation of the detection/classification/recommendation logic that lives inline in `simple_analyzer.py`. Files: `models.py`, `detector.py`, `classifier.py`, `loader.py`, `recommender.py`.
@@ -100,26 +142,29 @@ ls reports/graphs/                  # PNG files if --graphs used
 - Used by `tests/test_{models,detector,classifier,loader,recommender}.py` to exercise the logic in isolation.
 - Treat this as a refactor target. **All production behavior changes must still go in `simple_analyzer.py`.** Updating `analyzer/*` alone will not change the CLI output.
 
-### `k8s_advisor/visualizer.py` (16KB)
+### `k8s_advisor/visualizer.py` (~790 lines)
 **Purpose:** Graph generation (6 charts)
 - Requires matplotlib/numpy/pandas
 - Graceful degradation if not installed
 - Outputs to `reports/graphs/`
 
-### `k8s_advisor/constants.py` (10KB)
+### `k8s_advisor/constants.py` (~380 lines)
 **Purpose:** Single source of truth for all thresholds
 - CPU/Memory efficiency thresholds (50% over, 85% under)
 - CPU guardrails (min 50m, baseline 100m, min saving 50m)
+- Memory guardrail floor (`MEM_MIN_RECOMMENDED_MI = 16`)
 - Stability thresholds (>2 restarts/day = unstable)
-- **IMPORTANT:** All analyzer logic must use these constants
+- Confidence-scoring weights and band cutoffs
+- **IMPORTANT:** All analyzer logic must use these constants. New magic
+  numbers belong here, not inline.
 
-### `k8s_advisor/collector/kubernetes.py` (~620 lines)
+### `k8s_advisor/collector/kubernetes.py` (~705 lines)
 **Purpose:** K8s API wrapper
 - Uses official `kubernetes` Python client
 - Functions: get_deployments(), get_statefulsets(), get_pod_metrics()
 - Handles metrics-server API for current resource usage
 
-### `k8s_advisor/collector/prometheus.py` (~1000 lines)
+### `k8s_advisor/collector/prometheus.py` (~1160 lines)
 **Purpose:** Prometheus detection and queries
 - 5 auto-detection methods
 - Port-forward management
@@ -183,6 +228,23 @@ if wasteful (>3x request): reduce to max(request*2.0, P95*1.2)
 if OOM: max(request*1.5, P95*1.3, Max*1.2)
 if >90% limit: increase by 30%
 ```
+
+## WorkloadAnalysis Fields (recently added)
+
+Beyond the core priority/scaling/recommendation fields, the dataclass
+now carries:
+
+- `confidence: float` (0.0–1.0), `confidence_band: str` ("high"/"medium"/"low"),
+  `confidence_reasons: list[str]` — populated by `_confidence_score()` for
+  every analysis. Surfaces in markdown when `confidence_reasons` is
+  non-empty (using emptiness as the "did the scorer run" signal, since
+  `confidence == 0.0` is also the dataclass default for hand-built test
+  fixtures).
+- `fingerprint`, `previously_seen`, `times_seen`, `first_seen` — populated
+  only when `--state-dir` was passed. Drives Slack/Teams noise suppression.
+- `policy_name: str` — name of the per-namespace profile that drove this
+  row. `"default"` when no `--profiles` was passed; the markdown template
+  hides the `[Policy: <name>]` tag for the default case to avoid noise.
 
 ## Output Formats
 
