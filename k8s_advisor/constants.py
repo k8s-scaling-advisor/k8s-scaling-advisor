@@ -74,6 +74,7 @@ BURST_HEADROOM_MULTIPLIER = 1.5  # Limits should be ≥1.5x requests
 CPU_MIN_RECOMMENDED_M = 50  # Absolute floor for any CPU request recommendation
 CPU_REDUCTION_BASELINE_M = 100  # Don't suggest reduction if current request ≤ this
 CPU_REDUCTION_MIN_SAVING_M = 50  # Don't suggest reduction if saving < this amount
+MEM_MIN_RECOMMENDED_MI = 16  # Absolute floor for any memory request recommendation
 
 # Kubernetes validity constraints
 CPU_ABSOLUTE_FLOOR_M = 100  # Container runtime overhead minimum

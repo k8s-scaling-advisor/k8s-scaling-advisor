@@ -12,13 +12,13 @@ from k8s_advisor.constants import (
     CPU_REDUCTION_MIN_SAVING_M,
     CPU_UNDER_REQUESTED_THRESHOLD,
     HEADROOM_MULTIPLIER,
+    MEM_MIN_RECOMMENDED_MI,
     MEM_OVER_REQUESTED_THRESHOLD,
     MEM_UNDER_REQUESTED_THRESHOLD,
 )
 from k8s_advisor.profiles import (
     DEFAULT_PROFILE,
     DEFAULT_PROFILE_SET,
-    MEM_MIN_RECOMMENDED_MI_DEFAULT,
     Profile,
     ProfileSet,
     load_profiles,
@@ -34,7 +34,7 @@ def test_default_profile_mirrors_constants():
     assert DEFAULT_PROFILE.cpu_headroom == HEADROOM_MULTIPLIER
     assert DEFAULT_PROFILE.mem_headroom == HEADROOM_MULTIPLIER
     assert DEFAULT_PROFILE.min_cpu_request_m == CPU_MIN_RECOMMENDED_M
-    assert DEFAULT_PROFILE.min_mem_request_mi == MEM_MIN_RECOMMENDED_MI_DEFAULT
+    assert DEFAULT_PROFILE.min_mem_request_mi == MEM_MIN_RECOMMENDED_MI
     assert DEFAULT_PROFILE.min_cpu_saving_m == CPU_REDUCTION_MIN_SAVING_M
     assert DEFAULT_PROFILE.cpu_over_pct == CPU_OVER_REQUESTED_THRESHOLD
     assert DEFAULT_PROFILE.cpu_under_pct == CPU_UNDER_REQUESTED_THRESHOLD
@@ -196,6 +196,42 @@ def test_load_profiles_missing_file():
     """A nonexistent path raises with the path in the message."""
     with pytest.raises(ValueError, match="not found"):
         load_profiles("/tmp/does-not-exist-12345.yaml")
+
+
+def test_load_profiles_rejects_non_mapping_default(tmp_path: Path):
+    """`default: <scalar>` raises rather than silently degrading to defaults."""
+    policy = tmp_path / "p.yaml"
+    policy.write_text("default: false\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="`default:` must be a mapping"):
+        load_profiles(policy)
+
+
+def test_load_profiles_rejects_non_mapping_namespaces(tmp_path: Path):
+    """`namespaces: <scalar>` raises rather than silently no-opping."""
+    policy = tmp_path / "p.yaml"
+    policy.write_text("namespaces: 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="`namespaces:` must be a mapping"):
+        load_profiles(policy)
+
+
+def test_load_profiles_rejects_non_mapping_namespace_block(tmp_path: Path):
+    """A namespace whose value is a scalar raises with the namespace name."""
+    policy = tmp_path / "p.yaml"
+    policy.write_text("namespaces:\n  prod: 'tight'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"prod.*must be a mapping"):
+        load_profiles(policy)
+
+
+def test_load_profiles_allows_empty_namespace_block(tmp_path: Path):
+    """A namespace with no overrides (`prod:` followed by nothing) is valid."""
+    policy = tmp_path / "p.yaml"
+    policy.write_text("namespaces:\n  prod:\n", encoding="utf-8")
+    ps = load_profiles(policy)
+    # Empty block resolves to a profile with the namespace's name but
+    # otherwise inheriting every default.
+    prof = ps.for_namespace("prod")
+    assert prof.name == "prod"
+    assert prof.cpu_headroom == HEADROOM_MULTIPLIER
 
 
 # ──────────────────────────────────────────────────────────────────────

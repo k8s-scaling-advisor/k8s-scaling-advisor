@@ -46,14 +46,10 @@ from k8s_advisor.constants import (
     CPU_REDUCTION_MIN_SAVING_M,
     CPU_UNDER_REQUESTED_THRESHOLD,
     HEADROOM_MULTIPLIER,
+    MEM_MIN_RECOMMENDED_MI,
     MEM_OVER_REQUESTED_THRESHOLD,
     MEM_UNDER_REQUESTED_THRESHOLD,
 )
-
-# Memory floor matches the analyzer's hardcoded `max(16, ...)` in the
-# request recommendation path. Keeping it here lets profiles raise the
-# floor for namespaces with chunkier baseline workloads (JVM, ES).
-MEM_MIN_RECOMMENDED_MI_DEFAULT = 16
 
 # Allowed keys in a profile block — used to reject typos at load time.
 _PROFILE_KEYS = frozenset(
@@ -81,7 +77,7 @@ class Profile:
     cpu_headroom: float = HEADROOM_MULTIPLIER
     mem_headroom: float = HEADROOM_MULTIPLIER
     min_cpu_request_m: float = CPU_MIN_RECOMMENDED_M
-    min_mem_request_mi: float = MEM_MIN_RECOMMENDED_MI_DEFAULT
+    min_mem_request_mi: float = MEM_MIN_RECOMMENDED_MI
     min_cpu_saving_m: float = CPU_REDUCTION_MIN_SAVING_M
     cpu_over_pct: float = CPU_OVER_REQUESTED_THRESHOLD
     cpu_under_pct: float = CPU_UNDER_REQUESTED_THRESHOLD
@@ -141,21 +137,36 @@ def load_profiles(path: str | Path) -> ProfileSet:
             f"Unknown top-level key(s) in profiles file: {sorted(unknown_top)}. Allowed: {sorted(_TOP_LEVEL_KEYS)}"
         )
 
-    default = _parse_profile("default", raw.get("default") or {}, base=DEFAULT_PROFILE)
+    # Validate top-level shapes explicitly before _parse_profile sees them.
+    # `or {}` on its own would let a falsy non-mapping (`default: false`,
+    # `namespaces: 0`) silently degrade to an empty dict — the loader's
+    # "fail loud on typos" promise wouldn't hold for those cases.
+    raw_default = raw.get("default")
+    if raw_default is None:
+        raw_default = {}
+    elif not isinstance(raw_default, dict):
+        raise ValueError(f"`default:` must be a mapping, got {type(raw_default).__name__}")
+    default = _parse_profile("default", raw_default, base=DEFAULT_PROFILE)
 
-    ns_raw = raw.get("namespaces") or {}
-    if not isinstance(ns_raw, dict):
-        raise ValueError(f"`namespaces:` must be a mapping, got {type(ns_raw).__name__}")
+    raw_namespaces = raw.get("namespaces")
+    if raw_namespaces is None:
+        raw_namespaces = {}
+    elif not isinstance(raw_namespaces, dict):
+        raise ValueError(f"`namespaces:` must be a mapping, got {type(raw_namespaces).__name__}")
 
     namespaces: dict[str, Profile] = {}
-    for ns_name, ns_block in ns_raw.items():
+    for ns_name, ns_block in raw_namespaces.items():
         if not isinstance(ns_name, str) or not ns_name:
             raise ValueError(f"Namespace key must be a non-empty string, got {ns_name!r}")
         # Per-namespace overrides layer on top of the (already-resolved)
         # default profile, so a user who only sets `cpu_headroom: 1.5`
         # for `prod-api` still inherits all the other defaults the rest
         # of the policy file established.
-        namespaces[ns_name] = _parse_profile(ns_name, ns_block or {}, base=default)
+        if ns_block is None:
+            ns_block = {}
+        elif not isinstance(ns_block, dict):
+            raise ValueError(f"Namespace `{ns_name}` must be a mapping, got {type(ns_block).__name__}")
+        namespaces[ns_name] = _parse_profile(ns_name, ns_block, base=default)
 
     return ProfileSet(default=default, namespaces=namespaces)
 
