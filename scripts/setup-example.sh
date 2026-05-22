@@ -52,7 +52,12 @@ echo "==> Running k8s-advisor collect"
 cd "${REPO_ROOT}"
 "$PYTHON" main.py collect -n "${NAMESPACE}"
 
-LATEST_CSV="$(find reports -maxdepth 1 -name 'k8s-advisor_*.csv' -print0 | xargs -0 ls -t | head -1)"
+LATEST_CSV="$(find reports -maxdepth 1 -name 'k8s-advisor_*.csv' -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -1)"
+if [[ -z "${LATEST_CSV}" || ! -f "${LATEST_CSV}" ]]; then
+  echo "ERROR: collect did not produce a reports/k8s-advisor_*.csv file." >&2
+  echo "       Check the previous step's output for failures." >&2
+  exit 1
+fi
 echo "==> Running k8s-advisor analyze on ${LATEST_CSV}"
 "$PYTHON" main.py analyze "${LATEST_CSV}"
 

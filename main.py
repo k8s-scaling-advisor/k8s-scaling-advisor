@@ -583,6 +583,8 @@ def cmd_analyze(args):
             output_dir=str(reports_dir),
             generate_graphs=args.graphs,
             formats=formats,
+            state_dir=getattr(args, "state_dir", None),
+            profiles_path=getattr(args, "profiles", None),
         )
         print("\n✅ Analysis complete!")
         for fmt, path in written.items():
@@ -647,13 +649,21 @@ def cmd_report(args):
     class AnalyzeArgs:
         """Minimal stand-in for argparse.Namespace consumed by cmd_analyze."""
 
-        def __init__(self, csv_file, graphs, fmt):
+        def __init__(self, csv_file, graphs, fmt, state_dir, profiles):
             """Capture fields cmd_analyze expects."""
             self.csv_file = csv_file
             self.graphs = graphs
             self.format = fmt
+            self.state_dir = state_dir
+            self.profiles = profiles
 
-    analyze_args = AnalyzeArgs(output_file, args.graphs, args.format)
+    analyze_args = AnalyzeArgs(
+        output_file,
+        args.graphs,
+        args.format,
+        getattr(args, "state_dir", None),
+        getattr(args, "profiles", None),
+    )
     cmd_analyze(analyze_args)
 
 
@@ -716,6 +726,24 @@ Examples:
         default="md",
         help="Comma-separated output formats: md, json (default: md). Example: --format md,json",
     )
+    analyze_parser.add_argument(
+        "--state-dir",
+        dest="state_dir",
+        default=None,
+        help="Optional directory to persist recommendation fingerprints across "
+        "runs. When set, each workload's analysis is annotated with "
+        "previously_seen / times_seen / first_seen so downstream tooling can "
+        "suppress noise. State is stored in <state-dir>/seen.json.",
+    )
+    analyze_parser.add_argument(
+        "--profiles",
+        dest="profiles",
+        default=None,
+        help="Optional path to a YAML policy file with per-namespace overrides "
+        "for headroom multipliers, guardrail floors, and efficiency thresholds. "
+        "See k8s_advisor/profiles.py for the schema. When omitted, every "
+        "namespace uses the project defaults.",
+    )
 
     # Report command (full pipeline)
     report_parser = subparsers.add_parser("report", help="Full pipeline: collect + analyze")
@@ -733,6 +761,24 @@ Examples:
         "--format",
         default="md",
         help="Comma-separated output formats: md, json (default: md). Example: --format md,json",
+    )
+    report_parser.add_argument(
+        "--state-dir",
+        dest="state_dir",
+        default=None,
+        help="Optional directory to persist recommendation fingerprints across "
+        "runs. When set, each workload's analysis is annotated with "
+        "previously_seen / times_seen / first_seen so downstream tooling can "
+        "suppress noise. State is stored in <state-dir>/seen.json.",
+    )
+    report_parser.add_argument(
+        "--profiles",
+        dest="profiles",
+        default=None,
+        help="Optional path to a YAML policy file with per-namespace overrides "
+        "for headroom multipliers, guardrail floors, and efficiency thresholds. "
+        "See k8s_advisor/profiles.py for the schema. When omitted, every "
+        "namespace uses the project defaults.",
     )
     report_parser.add_argument("--prometheus-user", help="Username for Prometheus Basic Auth")
     report_parser.add_argument("--prometheus-password", help="Password for Prometheus Basic Auth")
