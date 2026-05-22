@@ -31,14 +31,15 @@ if ! venv/bin/python -c "import pytest" 2>/dev/null; then
     exit 1
 fi
 
-# Parse arguments
-PYTEST_ARGS="-v"
+# Parse arguments. Use an array so flags get word-split correctly without
+# the shellcheck SC2086 footgun of an unquoted string variable.
+PYTEST_ARGS=("-v")
 if [[ "$*" == *"--cov"* ]]; then
-    PYTEST_ARGS="$PYTEST_ARGS --cov=k8s_advisor --cov-report=term-missing"
+    PYTEST_ARGS+=("--cov=k8s_advisor" "--cov-report=term-missing")
 fi
 
 # Run tests
-if venv/bin/python -m pytest tests/ $PYTEST_ARGS; then
+if venv/bin/python -m pytest tests/ "${PYTEST_ARGS[@]}"; then
     echo ""
     echo -e "${GREEN}✅ All unit tests passed!${NC}"
     exit 0

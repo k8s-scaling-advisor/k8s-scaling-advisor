@@ -13,6 +13,23 @@ cd k8s-scaling-advisor
 python3 -m venv venv
 source venv/bin/activate
 pip install -e ".[all]"
+
+# Install pre-commit hooks (one-time, runs ruff + actionlint + shellcheck
+# + structural YAML/whitespace checks on every `git commit`)
+pip install pre-commit
+pre-commit install
+```
+
+The pre-commit hooks are fast (<2s on typical diffs) and catch the
+classes of bugs we've actually shipped before (workflow-injection
+patterns, ruff-format drift, broken YAML in chart templates). The
+heavier security scans (Semgrep, CodeQL) run in CI on push.
+
+To run the chart-lint hook (it's manual-stage so commits without Helm
+installed still work), use:
+
+```bash
+pre-commit run --hook-stage manual --all-files
 ```
 
 ## Development Workflow
