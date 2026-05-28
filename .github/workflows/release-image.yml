@@ -183,8 +183,18 @@ jobs:
           fi
           IMAGE_REPO="${REGISTRY}/${IMAGE_NAME}"
 
+          # Emit a plain "true"/"false" string for the metadata-action
+          # enable= attribute.  Evaluating this in bash avoids the YAML
+          # folded-scalar edge-case that produced an empty enable= value.
+          if [ "${REF_TYPE}" = "tag" ] || [ "${EVENT_NAME}" = "workflow_run" ]; then
+            IS_RELEASE="true"
+          else
+            IS_RELEASE="false"
+          fi
+
           echo "image_tag=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           echo "image_repo=${IMAGE_REPO}" >> "${GITHUB_OUTPUT}"
+          echo "is_release=${IS_RELEASE}" >> "${GITHUB_OUTPUT}"
 
       - name: Docker metadata
         id: meta
