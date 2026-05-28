@@ -183,22 +183,27 @@ jobs:
           fi
           IMAGE_REPO="${REGISTRY}/${IMAGE_NAME}"
 
+          # Emit a plain "true"/"false" string for the metadata-action
+          # enable= attribute.  Evaluating this in bash avoids the YAML
+          # folded-scalar edge-case that produced an empty enable= value.
+          if [ "${REF_TYPE}" = "tag" ] || [ "${EVENT_NAME}" = "workflow_run" ]; then
+            IS_RELEASE="true"
+          else
+            IS_RELEASE="false"
+          fi
+
           echo "image_tag=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           echo "image_repo=${IMAGE_REPO}" >> "${GITHUB_OUTPUT}"
+          echo "is_release=${IS_RELEASE}" >> "${GITHUB_OUTPUT}"
 
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
-        env:
-          # Tag :latest only on real tagged releases (push: tags or workflow_run
-          # from auto-tag). workflow_dispatch ad-hoc rebuilds must not move :latest.
-          IS_RELEASE: >-
-            ${{ github.ref_type == 'tag' || github.event_name == 'workflow_run' }}
         with:
           images: ${{ steps.vars.outputs.image_repo }}
           tags: |
             type=raw,value=${{ steps.vars.outputs.image_tag }}
-            type=raw,value=latest,enable=${{ env.IS_RELEASE }}
+            type=raw,value=latest,enable=${{ steps.vars.outputs.is_release }}
             type=sha,format=short
 
       - name: Build and push image
@@ -225,7 +230,7 @@ jobs:
           output-format: sarif
 
       - name: Upload Grype scan
-        if: always()
+        if: always() && steps.scan.outputs.sarif != ''
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}
