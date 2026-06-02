@@ -8,5 +8,5 @@
 
 kubernetes>=12.0.1
 jinja2>=3.1.6
-requests>=2.32.0
+requests>=2.34.2
 pyyaml>=6.0.3
