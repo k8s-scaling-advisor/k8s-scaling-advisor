@@ -1,7 +1,7 @@
 # Pinned to an immutable digest so rebuilds don't drift. Bumped by
 # Dependabot's docker ecosystem (or manually) — tag stays as a comment for
 # human reference.
-FROM python:3.12-slim@sha256:9d3abd9fc11d06998ccdbdd93b4dd49b5ad7d67fcbbc11c016eb0eb2c2194891
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
 
 # OCI image metadata. Source labels let GHCR auto-link the image to the repo.
 LABEL org.opencontainers.image.source="https://github.com/k8s-scaling-advisor/k8s-scaling-advisor" \
