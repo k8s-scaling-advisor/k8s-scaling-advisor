@@ -36,10 +36,10 @@ jobs:
       - name: Verify release label was applied by the repo owner
         env:
           ACTOR: ${{ github.event.pull_request.merged_by.login }}
-          OWNER: ${{ github.repository_owner }}
+          ALLOWED_ACTOR: rajeshkodali
         run: |
-          if [ "${ACTOR}" != "${OWNER}" ]; then
-            echo "::error::Release label must be applied by the repo owner (${OWNER}). Got: ${ACTOR}"
+          if [ "${ACTOR}" != "${ALLOWED_ACTOR}" ]; then
+            echo "::error::Release label must be applied by ${ALLOWED_ACTOR}. Got: ${ACTOR}"
             exit 1
           fi
           echo "::notice::Release authorized by ${ACTOR}."
