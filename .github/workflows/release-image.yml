@@ -15,10 +15,12 @@ on:
   # do NOT trigger downstream workflows (documented GitHub safeguard).
   # `workflow_run` runs in the default branch's context — the job
   # below resolves the actual tag at runtime via `git for-each-ref`.
+  # NOTE: no `branches:` filter here — workflow_run.branches matches the
+  # branch the *triggering* workflow ran on (the PR head branch), not the
+  # base branch. Filtering on [main] silently blocked every release.
   workflow_run:
     workflows: ["Auto-tag merged release PR"]
     types: [completed]
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
