@@ -230,6 +230,7 @@ jobs:
           only-fixed: true
           fail-build: true
           output-format: sarif
+          config: .grype.yaml
 
       - name: Upload Grype scan
         if: always() && steps.scan.outputs.sarif != ''
