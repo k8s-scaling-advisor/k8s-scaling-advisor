@@ -33,6 +33,17 @@ jobs:
     permissions:
       contents: write  # tag push
     steps:
+      - name: Verify release label was applied by the repo owner
+        env:
+          ACTOR: ${{ github.event.pull_request.merged_by.login }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ "${ACTOR}" != "${OWNER}" ]; then
+            echo "::error::Release label must be applied by the repo owner (${OWNER}). Got: ${ACTOR}"
+            exit 1
+          fi
+          echo "::notice::Release authorized by ${ACTOR}."
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
