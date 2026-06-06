@@ -1,13 +1,12 @@
 name: Auto-tag merged release PR
 
-# When a PR labeled `release` lands on main, push a `v<chart-version>` tag.
-# That tag push triggers `release-image.yml` (build/sign/scan/publish image
-# + chart + GitHub Release). All other merges are silent.
+# When a PR labeled `release` lands on main, auto-increment the patch version
+# from the latest v* git tag and push the new tag. That triggers
+# `release-image.yml` (build/sign/scan/publish image + chart + GitHub Release).
+# All other merges are silent.
 #
-# Source of truth for the version is `charts/k8s-scaling-advisor/Chart.yaml`'s
-# `version:` field. Bump it in the PR you want to release; this workflow
-# uses that value verbatim. If the tag already exists (someone forgot to
-# bump), the workflow exits 0 with a warning rather than failing the merge.
+# Version source of truth: git tags. No manual Chart.yaml bumps needed —
+# merging a PR with the `release` label is the only required step.
 
 on:
   pull_request:
@@ -54,39 +53,27 @@ jobs:
           # `release`.
           persist-credentials: true
 
-      - name: Read chart version
+      - name: Compute next version
         id: ver
         run: |
-          VERSION="$(awk '/^version:/ {print $2; exit}' charts/k8s-scaling-advisor/Chart.yaml)"
-          if [ -z "$VERSION" ]; then
-            echo "::error::Could not parse version from Chart.yaml"
-            exit 1
+          # Find the latest v* tag on origin and bump the patch.
+          # Falls back to v0.1.0 if no tags exist yet.
+          git fetch --tags origin
+          LATEST="$(git tag --list 'v*' --sort=-version:refname | head -1)"
+          if [ -z "${LATEST}" ]; then
+            NEXT="0.1.0"
+          else
+            MAJOR="$(echo "${LATEST#v}" | cut -d. -f1)"
+            MINOR="$(echo "${LATEST#v}" | cut -d. -f2)"
+            PATCH="$(echo "${LATEST#v}" | cut -d. -f3)"
+            NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
           fi
-          TAG="v${VERSION}"
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
-          echo "tag=${TAG}"         >> "${GITHUB_OUTPUT}"
-          echo "Releasing ${TAG}"
-
-      - name: Bail if tag already exists
-        id: check
-        env:
-          TAG: ${{ steps.ver.outputs.tag }}
-        run: |
-          if git rev-parse --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::warning::Tag ${TAG} already exists — bump Chart.yaml version on the next release PR."
-            echo "skipped=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::warning::Tag ${TAG} already pushed to origin."
-            echo "skipped=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          echo "skipped=false" >> "${GITHUB_OUTPUT}"
-          echo "Tag does not exist; safe to create."
+          TAG="v${NEXT}"
+          echo "version=${NEXT}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${TAG}"      >> "${GITHUB_OUTPUT}"
+          echo "::notice::Latest tag: ${LATEST:-none} → next: ${TAG}"
 
       - name: Create and push tag
-        if: steps.check.outputs.skipped != 'true'
         env:
           TAG: ${{ steps.ver.outputs.tag }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -110,24 +97,14 @@ jobs:
       - name: Record release-meta for downstream workflow
         env:
           TAG: ${{ steps.ver.outputs.tag }}
-          SKIPPED: ${{ steps.check.outputs.skipped }}
         run: |
-          # Hand a status + (optionally) the tag name to release-image.yml
-          # via an artifact. Using an artifact (vs. having release-image
-          # discover the tag with `git for-each-ref`) avoids races with
-          # any other tag-push that lands between our push and its
-          # checkout.
-          #
-          # Always write the status file — downstream uses it to decide
-          # release-vs-skip without failing on a missing artifact. The
-          # tag file only exists on the release path.
+          # Hand the tag name to release-image.yml via an artifact.
+          # Using an artifact (vs. having release-image discover the tag
+          # with `git for-each-ref`) avoids races with any other tag-push
+          # that lands between our push and its checkout.
           mkdir -p release-meta
-          if [ "${SKIPPED}" = "true" ]; then
-            printf '%s' "skipped" > release-meta/status
-          else
-            printf '%s' "release" > release-meta/status
-            printf '%s' "${TAG}"  > release-meta/tag
-          fi
+          printf '%s' "release" > release-meta/status
+          printf '%s' "${TAG}"  > release-meta/tag
 
       - name: Upload release-meta artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
