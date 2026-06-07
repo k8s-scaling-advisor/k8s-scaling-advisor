@@ -15,10 +15,12 @@ on:
   # do NOT trigger downstream workflows (documented GitHub safeguard).
   # `workflow_run` runs in the default branch's context — the job
   # below resolves the actual tag at runtime via `git for-each-ref`.
+  # NOTE: no `branches:` filter here — workflow_run.branches matches the
+  # branch the *triggering* workflow ran on (the PR head branch), not the
+  # base branch. Filtering on [main] silently blocked every release.
   workflow_run:
     workflows: ["Auto-tag merged release PR"]
     types: [completed]
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -106,7 +108,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           # Need full history + tags so the workflow_run path can
           # resolve the most-recent v* tag the auto-tag workflow just
@@ -228,10 +230,11 @@ jobs:
           only-fixed: true
           fail-build: true
           output-format: sarif
+          config: .grype.yaml
 
       - name: Upload Grype scan
         if: always() && steps.scan.outputs.sarif != ''
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa  # v3
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v3
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}
           category: grype-container

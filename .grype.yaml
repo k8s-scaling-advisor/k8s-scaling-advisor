@@ -1,0 +1,8 @@
+ignore:
+  # CVE-2026-7210: fix only available in Python 3.15.0b2 (pre-release).
+  # No stable slim image exists for 3.15 yet. Re-evaluate when 3.15 goes GA.
+  # No `type:` constraint — Grype classifies the Python binary differently
+  # across runs (binary vs python); omitting it ensures the rule always fires.
+  - vulnerability: CVE-2026-7210
+    package:
+      name: python
