@@ -48,6 +48,10 @@ k8s-advisor report -n my-namespace --format md,json --graphs
 #   reports/graphs/*.png                           (with --graphs)
 ```
 
+> **Container users:** `--graphs` requires the `-full` image variant (`<version>-full`).
+> The default slim image omits matplotlib/pandas/numpy to stay ~170 MB.
+> See [Image variants](docs/DEPLOYMENT.md#image-variants) in the deployment guide.
+
 Full walkthrough including the offline `analyze` flow:
 [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
 
