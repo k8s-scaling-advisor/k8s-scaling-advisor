@@ -1,0 +1,70 @@
+# Multi-stage build using Chainguard's distroless Python image.
+#
+# Two build targets:
+#   docker build --target slim -t k8s-scaling-advisor:slim .   (~130 MB, no graphs)
+#   docker build --target full -t k8s-scaling-advisor:full .   (~404 MB, --graphs support)
+#
+# Default target (no --target flag) builds full.
+#
+# Digest pins — update with:
+#   docker pull cgr.dev/chainguard/python:latest-dev && \
+#     docker inspect --format='{{index .RepoDigests 0}}' cgr.dev/chainguard/python:latest-dev
+#   docker pull cgr.dev/chainguard/python:latest && \
+#     docker inspect --format='{{index .RepoDigests 0}}' cgr.dev/chainguard/python:latest
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Builder: shared base — installs core deps only
+# Tag: latest-dev (Python 3.14)
+FROM cgr.dev/chainguard/python@sha256:5b542358ae4f8a121f9b81661c449a83ad23a587a7d5fe2a530d7b3771b2dc5e AS builder-core
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /home/nonroot/build
+
+COPY requirements.txt ./
+RUN pip install --target=/home/nonroot/install/site-packages -r requirements.txt
+
+COPY . .
+RUN pip install --target=/home/nonroot/install/site-packages "." \
+    && mkdir -p /home/nonroot/build/reports
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Builder: full — adds viz deps on top of core
+FROM builder-core AS builder-full
+
+COPY requirements-viz.txt ./
+RUN pip install --target=/home/nonroot/install/site-packages -r requirements-viz.txt
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Runtime base: shared labels + env
+# Tag: latest (Python 3.14)
+FROM cgr.dev/chainguard/python@sha256:e4ec7051aae87617182379ef05c33ad757fbed85e804c5e07e9a2d1778042ae5 AS runtime-base
+
+LABEL org.opencontainers.image.source="https://github.com/k8s-scaling-advisor/k8s-scaling-advisor" \
+      org.opencontainers.image.description="Kubernetes resource optimization and autoscaling advisor" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/site-packages:/app
+
+WORKDIR /app
+
+ENTRYPOINT ["python3", "-m", "k8s_advisor.cli"]
+CMD ["--help"]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# slim: collect + analyze + report, no --graphs (~130 MB)
+FROM runtime-base AS slim
+
+COPY --from=builder-core /home/nonroot/install/site-packages /site-packages
+COPY --from=builder-core /home/nonroot/build /app
+
+# ──────────────────────────────────────────────────────────────────────────────
+# full: everything including --graphs support (~404 MB)
+FROM runtime-base AS full
+
+COPY --from=builder-full /home/nonroot/install/site-packages /site-packages
+COPY --from=builder-full /home/nonroot/build /app

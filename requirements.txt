@@ -10,3 +10,4 @@ kubernetes>=12.0.1
 jinja2>=3.1.6
 requests>=2.34.2
 pyyaml>=6.0.3
+aiohttp>=3.14.0  # transitive via kubernetes; pin to avoid GHSA-jg22-mg44-37j8 / GHSA-hg6j-4rv6-33pg
