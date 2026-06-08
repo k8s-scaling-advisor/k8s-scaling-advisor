@@ -17,18 +17,43 @@ Security controls in the workflow:
 - Keyless Cosign signing with GitHub OIDC identity
 - Signature verification step in CI
 
+## Image variants
+
+Each release publishes two image tags:
+
+| Variant | Tag | Size | Use case |
+|---------|-----|------|----------|
+| **slim** _(default)_ | `<version>` | ~170 MB | `collect`, `analyze`, `report` — no graph support |
+| **full** | `<version>-full` | ~404 MB | Adds `--graphs` support (matplotlib / pandas / numpy) |
+
+Both variants are built on [Chainguard's distroless Python](https://images.chainguard.dev/directory/image/python/overview) and carry zero OS-level CVEs. The `latest` and `latest-full` floating tags always point to the most recent release.
+
+```bash
+# Slim (default) — collect, analyze, report
+docker pull ghcr.io/<owner>/k8s-scaling-advisor:<version>
+
+# Full — use this if you need --graphs
+docker pull ghcr.io/<owner>/k8s-scaling-advisor:<version>-full
+```
+
+The Helm chart defaults to the slim image. To use the full image, override the digest at install time (see [Deploy with Helm](#2-deploy-with-helm) below).
+
 ## 1) Build and push the image (manual fallback)
 
 From repository root:
 
 ```bash
-docker build -f Containerfile -t ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0 .
-docker push ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0
-```
+# Slim image
+docker build -f Containerfile.chainguard --target slim \
+  -t ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0 .
 
-The image includes:
-- Python runtime
-- project package + `k8s-advisor` CLI
+# Full image (with --graphs support)
+docker build -f Containerfile.chainguard --target full \
+  -t ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0-full .
+
+docker push ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0
+docker push ghcr.io/<your-org>/k8s-scaling-advisor:3.0.0-full
+```
 
 The image does NOT bundle `kubectl` or `curl`. Discovery and (when needed)
 port-forwarding go through the `kubernetes` Python client, so the runtime
