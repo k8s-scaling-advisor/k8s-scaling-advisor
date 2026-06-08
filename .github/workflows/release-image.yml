@@ -102,6 +102,8 @@ jobs:
     outputs:
       image_ref: ${{ steps.export.outputs.image_ref }}
       image_digest: ${{ steps.export.outputs.image_digest }}
+      image_ref_full: ${{ steps.export.outputs.image_ref_full }}
+      image_digest_full: ${{ steps.export.outputs.image_digest_full }}
       chart_ref: ${{ steps.export.outputs.chart_ref }}
       chart_version: ${{ steps.export.outputs.chart_version }}
       release_tag: ${{ steps.vars.outputs.image_tag }}
@@ -198,8 +200,9 @@ jobs:
           echo "image_repo=${IMAGE_REPO}" >> "${GITHUB_OUTPUT}"
           echo "is_release=${IS_RELEASE}" >> "${GITHUB_OUTPUT}"
 
-      - name: Docker metadata
-        id: meta
+      # ── Slim image (core only, default tag) ──────────────────────────────
+      - name: Docker metadata (slim)
+        id: meta-slim
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
         with:
           images: ${{ steps.vars.outputs.image_repo }}
@@ -208,50 +211,111 @@ jobs:
             type=raw,value=latest,enable=${{ steps.vars.outputs.is_release }}
             type=sha,format=short
 
-      - name: Build and push image
-        id: build
+      - name: Build and push slim image
+        id: build-slim
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
         with:
           context: .
-          file: ./Containerfile
+          file: ./Containerfile.chainguard
+          target: slim
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-slim.outputs.tags }}
+          labels: ${{ steps.meta-slim.outputs.labels }}
           provenance: mode=max
           sbom: true
 
-      - name: Run Grype vulnerability scan
-        id: scan
+      - name: Run Grype scan (slim)
+        id: scan-slim
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
         with:
-          image: ${{ steps.vars.outputs.image_repo }}@${{ steps.build.outputs.digest }}
+          image: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-slim.outputs.digest }}
           severity-cutoff: high
           only-fixed: true
           fail-build: true
           output-format: sarif
           config: .grype.yaml
 
-      - name: Upload Grype scan
-        if: always() && steps.scan.outputs.sarif != ''
+      - name: Upload Grype scan (slim)
+        if: always() && steps.scan-slim.outputs.sarif != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v3
         with:
-          sarif_file: ${{ steps.scan.outputs.sarif }}
-          category: grype-container
+          sarif_file: ${{ steps.scan-slim.outputs.sarif }}
+          category: grype-container-slim
 
+      # ── Full image (with viz, -full tag) ─────────────────────────────────
+      - name: Docker metadata (full)
+        id: meta-full
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
+        with:
+          images: ${{ steps.vars.outputs.image_repo }}
+          tags: |
+            type=raw,value=${{ steps.vars.outputs.image_tag }}-full
+            type=raw,value=latest-full,enable=${{ steps.vars.outputs.is_release }}
+            type=sha,format=short,suffix=-full
+
+      - name: Build and push full image
+        id: build-full
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+        with:
+          context: .
+          file: ./Containerfile.chainguard
+          target: full
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-full.outputs.tags }}
+          labels: ${{ steps.meta-full.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Run Grype scan (full)
+        id: scan-full
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
+        with:
+          image: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-full.outputs.digest }}
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          output-format: sarif
+          config: .grype.yaml
+
+      - name: Upload Grype scan (full)
+        if: always() && steps.scan-full.outputs.sarif != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v3
+        with:
+          sarif_file: ${{ steps.scan-full.outputs.sarif }}
+          category: grype-container-full
+
+      # ── Sign both images ──────────────────────────────────────────────────
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
 
-      - name: Sign image with keyless Cosign
+      - name: Sign slim image
         env:
-          IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-slim.outputs.digest }}
+          COSIGN_EXPERIMENTAL: "true"
+        run: cosign sign --yes "${IMAGE_REF}"
+
+      - name: Verify slim signature
+        env:
+          IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-slim.outputs.digest }}
+          CERT_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release-image.yml@${{ github.ref }}
           COSIGN_EXPERIMENTAL: "true"
         run: |
-          cosign sign --yes "${IMAGE_REF}"
+          cosign verify \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity "${CERT_IDENTITY}" \
+            "${IMAGE_REF}"
 
-      - name: Verify signature
+      - name: Sign full image
         env:
-          IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-full.outputs.digest }}
+          COSIGN_EXPERIMENTAL: "true"
+        run: cosign sign --yes "${IMAGE_REF}"
+
+      - name: Verify full signature
+        env:
+          IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-full.outputs.digest }}
           CERT_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release-image.yml@${{ github.ref }}
           COSIGN_EXPERIMENTAL: "true"
         run: |
@@ -272,7 +336,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
           IMAGE_REPO: ${{ steps.vars.outputs.image_repo }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.build-slim.outputs.digest }}
         run: |
           set -eu
           OWNER_LC="$(printf '%s' "${REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
@@ -298,9 +362,8 @@ jobs:
 
           if [ "${IS_TAG_RELEASE}" = "true" ]; then
             # Tagged release: chart version + appVersion sync to the tag.
-            # Pin image.tag so default `helm install` lands on the
-            # human-readable semver. Leave image.digest empty — the tag
-            # is itself the durable artifact.
+            # Pin image.tag so default `helm install` lands on the slim
+            # image. Users override image.tag to *-full for graphs support.
             CHART_VERSION="${IMAGE_TAG}"
             sed -i "s|^version:.*|version: ${CHART_VERSION}|" "${CHART_YAML}"
             sed -i "s|^appVersion:.*|appVersion: \"${CHART_VERSION}\"|" "${CHART_YAML}"
@@ -329,31 +392,37 @@ jobs:
         id: export
         env:
           IMAGE_REPO: ${{ steps.vars.outputs.image_repo }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST_SLIM: ${{ steps.build-slim.outputs.digest }}
+          IMAGE_DIGEST_FULL: ${{ steps.build-full.outputs.digest }}
           CHART_REF: ${{ steps.chart.outputs.chart_ref }}
           CHART_VERSION: ${{ steps.chart.outputs.chart_version }}
         run: |
-          IMAGE_REF="${IMAGE_REPO}@${IMAGE_DIGEST}"
+          IMAGE_REF="${IMAGE_REPO}@${IMAGE_DIGEST_SLIM}"
+          IMAGE_REF_FULL="${IMAGE_REPO}@${IMAGE_DIGEST_FULL}"
           {
             echo "image_ref=${IMAGE_REF}"
-            echo "image_digest=${IMAGE_DIGEST}"
+            echo "image_digest=${IMAGE_DIGEST_SLIM}"
+            echo "image_ref_full=${IMAGE_REF_FULL}"
+            echo "image_digest_full=${IMAGE_DIGEST_FULL}"
             echo "chart_ref=${CHART_REF}"
             echo "chart_version=${CHART_VERSION}"
           } >> "${GITHUB_OUTPUT}"
 
           cat > image-release.txt <<EOF
           IMAGE_REF=${IMAGE_REF}
+          IMAGE_REF_FULL=${IMAGE_REF_FULL}
           IMAGE_REPOSITORY=${IMAGE_REPO}
-          IMAGE_DIGEST=${IMAGE_DIGEST}
+          IMAGE_DIGEST_SLIM=${IMAGE_DIGEST_SLIM}
+          IMAGE_DIGEST_FULL=${IMAGE_DIGEST_FULL}
           CHART_REF=${CHART_REF}
           CHART_VERSION=${CHART_VERSION}
 
-          # Helm (immutable digest pin) — pulls the chart from GHCR (OCI)
+          # Helm install (slim image, immutable digest pin)
           helm upgrade --install k8s-scaling-advisor ${CHART_REF} \\
             --version ${CHART_VERSION} \\
             --namespace platform-observability --create-namespace \\
             --set image.repository=${IMAGE_REPO} \\
-            --set image.digest=${IMAGE_DIGEST}
+            --set image.digest=${IMAGE_DIGEST_SLIM}
           EOF
 
       - name: Upload release metadata artifact
@@ -378,12 +447,11 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.build-sign-publish.outputs.image_ref }}
           IMAGE_DIGEST: ${{ needs.build-sign-publish.outputs.image_digest }}
+          IMAGE_REF_FULL: ${{ needs.build-sign-publish.outputs.image_ref_full }}
+          IMAGE_DIGEST_FULL: ${{ needs.build-sign-publish.outputs.image_digest_full }}
           CHART_REF: ${{ needs.build-sign-publish.outputs.chart_ref }}
           CHART_VERSION: ${{ needs.build-sign-publish.outputs.chart_version }}
           REPO: ${{ github.repository }}
-          # `release_tag` is the un-prefixed version that the build job
-          # resolved (handles all three trigger paths). Prefix with `v`
-          # for tag_name / Release name below.
           VERSION: ${{ needs.build-sign-publish.outputs.release_tag }}
           REGISTRY_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
@@ -392,24 +460,38 @@ jobs:
             echo "tag=${TAG}"
           } >> "${GITHUB_OUTPUT}"
           {
-            echo "## Container image"
+            echo "## Container images"
             echo
-            echo "Pinned by digest (recommended for production):"
+            echo "Two variants are published per release:"
+            echo
+            echo "| Variant | Tag | Size | Use case |"
+            echo "|---------|-----|------|----------|"
+            echo "| **slim** _(default)_ | \`${VERSION}\` | ~170 MB | \`collect\`, \`analyze\`, \`report\` |"
+            echo "| **full** | \`${VERSION}-full\` | ~404 MB | Adds \`--graphs\` support |"
+            echo
+            echo "### Slim image (default)"
             echo
             echo '```bash'
+            echo "# By digest (recommended for production):"
             echo "docker pull ${IMAGE_REF}"
+            echo
+            echo "# By tag:"
+            echo "docker pull ${REGISTRY_IMAGE}:${VERSION}"
             echo '```'
             echo
-            echo "Or by tag:"
+            echo "### Full image (with \`--graphs\`)"
             echo
             echo '```bash'
-            echo "docker pull ${REGISTRY_IMAGE}:${VERSION}"
+            echo "# By digest:"
+            echo "docker pull ${IMAGE_REF_FULL}"
+            echo
+            echo "# By tag:"
+            echo "docker pull ${REGISTRY_IMAGE}:${VERSION}-full"
             echo '```'
             echo
             echo "## Helm install"
             echo
-            echo "The chart is published as an OCI artifact next to the image."
-            echo "No \`git clone\` required."
+            echo "Defaults to the slim image. No \`git clone\` required."
             echo
             echo '```bash'
             echo "helm upgrade --install k8s-scaling-advisor ${CHART_REF} \\"
@@ -419,21 +501,37 @@ jobs:
             echo "  --set image.digest=${IMAGE_DIGEST}"
             echo '```'
             echo
-            echo "## Verify the signature"
+            echo "To use the full image with \`--graphs\`:"
             echo
             echo '```bash'
+            echo "helm upgrade --install k8s-scaling-advisor ${CHART_REF} \\"
+            echo "  --version ${CHART_VERSION} \\"
+            echo "  --namespace platform-observability --create-namespace \\"
+            echo "  --set image.repository=${REGISTRY_IMAGE} \\"
+            echo "  --set image.digest=${IMAGE_DIGEST_FULL}"
+            echo '```'
+            echo
+            echo "## Verify the signatures"
+            echo
+            echo '```bash'
+            echo "# Slim:"
             echo "cosign verify \\"
             echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
             echo "  --certificate-identity-regexp \"https://github.com/${REPO}/.github/workflows/release-image.yml@refs/tags/v.*\" \\"
             echo "  ${IMAGE_REF}"
+            echo
+            echo "# Full:"
+            echo "cosign verify \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  --certificate-identity-regexp \"https://github.com/${REPO}/.github/workflows/release-image.yml@refs/tags/v.*\" \\"
+            echo "  ${IMAGE_REF_FULL}"
             echo '```'
             echo
             echo "## Artifacts"
             echo
-            echo "- **Image:** \`${REGISTRY_IMAGE}\`"
-            echo "- **Digest:** \`${IMAGE_DIGEST}\`"
+            echo "- **Slim image:** \`${REGISTRY_IMAGE}:${VERSION}\` — digest: \`${IMAGE_DIGEST}\`"
+            echo "- **Full image:** \`${REGISTRY_IMAGE}:${VERSION}-full\` — digest: \`${IMAGE_DIGEST_FULL}\`"
             echo "- **Chart:** \`${CHART_REF}\` (version \`${CHART_VERSION}\`)"
-            echo "- **Tag:** \`${VERSION}\`"
           } > body.md
           echo "body_path=body.md" >> "${GITHUB_OUTPUT}"
 
