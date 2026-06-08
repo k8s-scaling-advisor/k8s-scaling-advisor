@@ -517,13 +517,13 @@ jobs:
             echo "# Slim:"
             echo "cosign verify \\"
             echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
-            echo "  --certificate-identity-regexp \"https://github.com/${REPO}/.github/workflows/release-image.yml@refs/tags/v.*\" \\"
+            echo "  --certificate-identity-regexp \"https://github.com/${REPO}/.github/workflows/release-image.yml@refs/(tags/v|heads/main).*\" \\"
             echo "  ${IMAGE_REF}"
             echo
             echo "# Full:"
             echo "cosign verify \\"
             echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
-            echo "  --certificate-identity-regexp \"https://github.com/${REPO}/.github/workflows/release-image.yml@refs/tags/v.*\" \\"
+            echo "  --certificate-identity-regexp \"https://github.com/${REPO}/.github/workflows/release-image.yml@refs/(tags/v|heads/main).*\" \\"
             echo "  ${IMAGE_REF_FULL}"
             echo '```'
             echo
