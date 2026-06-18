@@ -243,6 +243,21 @@ jobs:
           sarif_file: ${{ steps.scan-slim.outputs.sarif }}
           category: grype-container-slim
 
+      # The SARIF scan above prints only a status line on failure
+      # ("discovered vulnerabilities at or above the severity threshold")
+      # because findings go to a file, not stdout. Re-run grype in table
+      # mode so the failing job log shows the actual CVEs. Mirrors the
+      # `Render findings as table` step in cve-scan.yml.
+      - name: Install Grype CLI (slim findings)
+        if: failure() && steps.scan-slim.outcome == 'failure'
+        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
+
+      - name: Render slim findings as table
+        if: failure() && steps.scan-slim.outcome == 'failure'
+        env:
+          IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-slim.outputs.digest }}
+        run: grype "${IMAGE_REF}" --only-fixed --fail-on high -o table --config .grype.yaml || true
+
       # ── Full image (with viz, -full tag) ─────────────────────────────────
       - name: Docker metadata (full)
         id: meta-full
@@ -285,6 +300,18 @@ jobs:
         with:
           sarif_file: ${{ steps.scan-full.outputs.sarif }}
           category: grype-container-full
+
+      # Same rationale as the slim table step above: surface the actual
+      # CVEs in the log when the full-image SARIF scan fails the build.
+      - name: Install Grype CLI (full findings)
+        if: failure() && steps.scan-full.outcome == 'failure'
+        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
+
+      - name: Render full findings as table
+        if: failure() && steps.scan-full.outcome == 'failure'
+        env:
+          IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-full.outputs.digest }}
+        run: grype "${IMAGE_REF}" --only-fixed --fail-on high -o table --config .grype.yaml || true
 
       # ── Sign both images ──────────────────────────────────────────────────
       - name: Install Cosign
