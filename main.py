@@ -598,6 +598,7 @@ def cmd_analyze(args):
             formats=formats,
             state_dir=getattr(args, "state_dir", None),
             profiles_path=getattr(args, "profiles", None),
+            cpu_limit_policy=getattr(args, "cpu_limit_policy", None),
         )
         print("\n✅ Analysis complete!")
         for fmt, path in written.items():
@@ -662,13 +663,14 @@ def cmd_report(args):
     class AnalyzeArgs:
         """Minimal stand-in for argparse.Namespace consumed by cmd_analyze."""
 
-        def __init__(self, csv_file, graphs, fmt, state_dir, profiles):
+        def __init__(self, csv_file, graphs, fmt, state_dir, profiles, cpu_limit_policy):
             """Capture fields cmd_analyze expects."""
             self.csv_file = csv_file
             self.graphs = graphs
             self.format = fmt
             self.state_dir = state_dir
             self.profiles = profiles
+            self.cpu_limit_policy = cpu_limit_policy
 
     analyze_args = AnalyzeArgs(
         output_file,
@@ -676,6 +678,7 @@ def cmd_report(args):
         args.format,
         getattr(args, "state_dir", None),
         getattr(args, "profiles", None),
+        getattr(args, "cpu_limit_policy", None),
     )
     cmd_analyze(analyze_args)
 
@@ -757,6 +760,18 @@ Examples:
         "See k8s_advisor/profiles.py for the schema. When omitted, every "
         "namespace uses the project defaults.",
     )
+    analyze_parser.add_argument(
+        "--cpu-limit-policy",
+        dest="cpu_limit_policy",
+        default=None,
+        choices=["neutral", "burst", "protect"],
+        help="Global stance for the CPU-limit recommendation under throttling. "
+        "'neutral' (default) presents both remove/widen and keep-to-protect-"
+        "co-tenants options without recommending a direction; 'burst' recommends "
+        "removing/widening the limit; 'protect' recommends keeping (and widening) "
+        "it to shield multi-tenant neighbors. A per-namespace cpu_limit_policy in "
+        "--profiles overrides this.",
+    )
 
     # Report command (full pipeline)
     report_parser = subparsers.add_parser("report", help="Full pipeline: collect + analyze")
@@ -792,6 +807,18 @@ Examples:
         "for headroom multipliers, guardrail floors, and efficiency thresholds. "
         "See k8s_advisor/profiles.py for the schema. When omitted, every "
         "namespace uses the project defaults.",
+    )
+    report_parser.add_argument(
+        "--cpu-limit-policy",
+        dest="cpu_limit_policy",
+        default=None,
+        choices=["neutral", "burst", "protect"],
+        help="Global stance for the CPU-limit recommendation under throttling. "
+        "'neutral' (default) presents both remove/widen and keep-to-protect-"
+        "co-tenants options without recommending a direction; 'burst' recommends "
+        "removing/widening the limit; 'protect' recommends keeping (and widening) "
+        "it to shield multi-tenant neighbors. A per-namespace cpu_limit_policy in "
+        "--profiles overrides this.",
     )
     report_parser.add_argument("--prometheus-user", help="Username for Prometheus Basic Auth")
     report_parser.add_argument("--prometheus-password", help="Password for Prometheus Basic Auth")

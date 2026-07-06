@@ -20,10 +20,13 @@ try:
         BASE_SCORE_PROMETHEUS,
         BURSTY_PENALTY,
         BURSTY_WORKLOAD_PATTERNS,
+        CPU_LIMIT_POLICY_BURST,
+        CPU_LIMIT_POLICY_PROTECT,
         CPU_MIN_RECOMMENDED_M,
         CPU_OVER_REQUESTED_THRESHOLD,
         CPU_REDUCTION_BASELINE_M,
         CPU_REDUCTION_MIN_SAVING_M,
+        CPU_THROTTLE_P0_THRESHOLD_PCT,
         CPU_UNDER_REQUESTED_THRESHOLD,
         GC_PENALTY,
         GC_RUNTIME_PATTERNS,
@@ -46,6 +49,8 @@ try:
         MEMORY_VOLATILITY_HIGH_THRESHOLD,
         MEMORY_VOLATILITY_LOW_THRESHOLD,
         OWNER_LABEL_KEYS,
+        READINESS_MAX_CV_FOR_REDUCTION,
+        RECOMMENDATION_DEADBAND_PCT,
         REQUESTS_NOT_SET_P0_CPU_M,
         REQUESTS_NOT_SET_P0_MEM_MI,
         RESTART_PENALTY,
@@ -53,6 +58,8 @@ try:
         SINGLE_REPLICA_PENALTY,
         UNSTABLE_RESTART_RATE_THRESHOLD,
         UNSTABLE_RESTART_THRESHOLD,
+        VPA_CONFIDENCE_BONUS,
+        VPA_DISAGREEMENT_RATIO,
     )
 except ImportError:
     # Fallback if constants not available
@@ -69,6 +76,11 @@ except ImportError:
     CPU_MIN_RECOMMENDED_M = 50
     CPU_REDUCTION_BASELINE_M = 100
     CPU_REDUCTION_MIN_SAVING_M = 50
+    CPU_THROTTLE_P0_THRESHOLD_PCT = 5
+    CPU_LIMIT_POLICY_BURST = "burst"
+    CPU_LIMIT_POLICY_PROTECT = "protect"
+    RECOMMENDATION_DEADBAND_PCT = 10
+    READINESS_MAX_CV_FOR_REDUCTION = 100
     MEMORY_VOLATILITY_LOW_THRESHOLD = 10
     MEMORY_VOLATILITY_HIGH_THRESHOLD = 20
     HPA_TARGET_UTILIZATION_DEFAULT = 75
@@ -100,11 +112,13 @@ except ImportError:
     LIMITS_BONUS = 0.05
     HIGH_CONF_THRESHOLD = 0.75
     MEDIUM_CONF_THRESHOLD = 0.50
+    VPA_CONFIDENCE_BONUS = 0.10
+    VPA_DISAGREEMENT_RATIO = 2.0
 
 # Profile imports live below the constants fallback so the analyzer
 # still loads if a partial install is missing constants.py — profiles.py
 # imports from constants.py too, so it'd fail in that scenario anyway.
-from k8s_advisor.profiles import DEFAULT_PROFILE, DEFAULT_PROFILE_SET, Profile
+from k8s_advisor.profiles import DEFAULT_PROFILE, DEFAULT_PROFILE_SET, Profile, ProfileSet
 
 
 class Priority(Enum):
@@ -185,6 +199,17 @@ class WorkloadAnalysis:
     key_labels: str = ""
     owner: str = ""
 
+    # VPA recommendation, when a VerticalPodAutoscaler targets this workload.
+    # Summed across containers (comparable to cpu_request / mem_request).
+    # Zero when no VPA signal is present.
+    vpa_present: bool = False
+    vpa_cpu_target: float = 0.0
+    vpa_mem_target: float = 0.0
+    vpa_mem_upper: float = 0.0
+    # Which signal drove the numeric recommendation base: "vpa" | "prometheus"
+    # | "metrics-server". Surfaced in the rationale so the number is auditable.
+    rec_basis: str = "metrics-server"
+
     # Confidence / data-quality flags
     low_confidence: bool = False
     insufficient_data: bool = False
@@ -255,6 +280,7 @@ def _confidence_score(
     pod_count: int,
     has_cpu_limit: bool,
     has_mem_limit: bool,
+    vpa_present: bool = False,
 ) -> tuple:
     """Score the recommendation's data-quality from 0.0 to 1.0.
 
@@ -291,6 +317,11 @@ def _confidence_score(
     if has_cpu_limit and has_mem_limit:
         score += LIMITS_BONUS
         reasons.append("CPU + memory limits set — saturation observable")
+    if vpa_present:
+        # A live VPA recommendation is a controller-computed target built from
+        # long-horizon usage + OOM history — a strong right-sizing signal.
+        score += VPA_CONFIDENCE_BONUS
+        reasons.append("VPA recommendation available — controller-computed target")
 
     score = max(0.0, min(1.0, score))
     if score >= HIGH_CONF_THRESHOLD:
@@ -305,6 +336,17 @@ def _confidence_score(
 def build_rationale(analysis: WorkloadAnalysis, has_prometheus: bool) -> str:
     """Build comprehensive rationale explaining recommendations using Prometheus data."""
     parts = []
+
+    # State the sizing basis up front so the number is auditable. VPA is a
+    # controller-computed target; the other two are our own estimates.
+    if analysis.rec_basis == "vpa":
+        parts.append(
+            f"Sizing basis: VerticalPodAutoscaler target "
+            f"(CPU {analysis.vpa_cpu_target:.0f}m, mem {analysis.vpa_mem_target:.0f}Mi) "
+            f"— preferred over local estimate"
+        )
+    elif analysis.rec_basis == "prometheus":
+        parts.append("Sizing basis: Prometheus P95 + headroom")
 
     # P0 Issues
     if "REQUESTS_NOT_SET" in analysis.issues:
@@ -451,6 +493,18 @@ _EXIT_CODE_HINTS = {
     143: "SIGTERM — graceful shutdown",
     255: "fatal exit / unhandled panic",
 }
+
+
+def _diverges(a: float, b: float, ratio: float) -> bool:
+    """True if a and b differ by more than `ratio`x in either direction.
+
+    Used to flag VPA-vs-Prometheus disagreement. Guards against zero so a
+    missing signal never reports a spurious divergence.
+    """
+    if a <= 0 or b <= 0:
+        return False
+    hi, lo = (a, b) if a >= b else (b, a)
+    return hi > lo * ratio
 
 
 def _crash_signal(reason: str, exit_code) -> str:
@@ -602,6 +656,17 @@ def analyze_workload(
     mem_stddev = safe_float(row.get("Mem_StdDev(Mi)", 0))
     mem_cv = safe_float(row.get("Mem_Volatility_CV", 0))
 
+    # VPA recommendation (optional input). Present iff a VerticalPodAutoscaler
+    # targets this workload and has produced a recommendation. VPA_Present
+    # gates use of the numbers so a zero target (no signal) can't be mistaken
+    # for a legitimate "size to zero".
+    vpa_present = (row.get("VPA_Present") or "").strip().lower() == "true"
+    vpa_cpu_target = safe_float(row.get("VPA_CPU_Target(m)", 0))
+    vpa_mem_target = safe_float(row.get("VPA_Mem_Target(Mi)", 0))
+    vpa_mem_upper = safe_float(row.get("VPA_Mem_Upper(Mi)", 0))
+    has_vpa_cpu = vpa_present and vpa_cpu_target > 0
+    has_vpa_mem = vpa_present and vpa_mem_target > 0
+
     oom_kills = safe_int(row.get("OOMKilled_Count", 0))
     total_restarts = safe_int(row.get("Total_Restarts", 0))
     restart_rate = safe_float(row.get("Restart_Rate_Per_Day", 0))
@@ -663,7 +728,7 @@ def analyze_workload(
         issues.append("OOM_KILLED")
         priority = Priority.P0
 
-    if has_prometheus and cpu_throttle > 5:
+    if has_prometheus and cpu_throttle > CPU_THROTTLE_P0_THRESHOLD_PCT:
         issues.append("CPU_THROTTLED")
         priority = Priority.P0
 
@@ -718,11 +783,26 @@ def analyze_workload(
     cpu_delta_m = 0.0
     mem_delta_mi = 0.0
 
-    # Use P95 for recommendations if available (more accurate)
-    rec_cpu_base = cpu_p95 if (has_prometheus and cpu_p95 > 0) else avg_cpu
-    rec_mem_base = mem_p95 if (has_prometheus and mem_p95 > 0) else avg_mem
+    # Recommendation basis, in precedence order:
+    #   1. VPA target  — a controller-computed right-sizing number. Preferred
+    #      because it is purpose-built for this and already accounts for
+    #      historical usage + OOM. A VPA *target* is headroom-inclusive, so we
+    #      do NOT re-apply our cpu_headroom/mem_headroom on top (that would
+    #      double-count headroom); we use it directly, floored by guardrails.
+    #   2. Prometheus P95 — our own estimate; gets the headroom multiplier.
+    #   3. metrics-server avg — coarsest fallback; gets the headroom multiplier.
+    if has_vpa_cpu:
+        rec_cpu_req = max(profile.min_cpu_request_m, vpa_cpu_target)
+        rec_basis = "vpa"
+    elif has_prometheus and cpu_p95 > 0:
+        rec_cpu_req = max(profile.min_cpu_request_m, cpu_p95 * profile.cpu_headroom)
+        rec_basis = "prometheus"
+    else:
+        rec_cpu_req = max(profile.min_cpu_request_m, avg_cpu * profile.cpu_headroom)
+        rec_basis = "metrics-server"
 
-    rec_cpu_req = max(profile.min_cpu_request_m, rec_cpu_base * profile.cpu_headroom)
+    # `rec_mem_base` retained for the P95/avg path below; VPA overrides it.
+    rec_mem_base = mem_p95 if (has_prometheus and mem_p95 > 0) else avg_mem
 
     # Memory headroom is volatility-aware: a 50%-CV workload sized at
     # P95 × 1.25 will OOM during the next swing. CV is only meaningful in
@@ -739,7 +819,18 @@ def analyze_workload(
         mem_headroom = max(profile.mem_headroom, HEADROOM_MULTIPLIER_MID_VOLATILITY)
     else:
         mem_headroom = profile.mem_headroom
-    rec_mem_req = max(profile.min_mem_request_mi, rec_mem_base * mem_headroom)
+
+    if has_vpa_mem:
+        # VPA memory target is headroom-inclusive → use directly. But never let
+        # it size a high-volatility workload below what our volatility-aware
+        # estimate would demand — under-sizing a leaky/bursty workload OOMs it,
+        # the costlier failure. The volatility floor is the guardrail; VPA
+        # otherwise wins even when it is *lower* than our P95 estimate (that is
+        # the whole point of trusting the controller).
+        volatility_floor = rec_mem_base * mem_headroom if high_volatility else 0.0
+        rec_mem_req = max(profile.min_mem_request_mi, vpa_mem_target, volatility_floor)
+    else:
+        rec_mem_req = max(profile.min_mem_request_mi, rec_mem_base * mem_headroom)
 
     if high_volatility:
         issues.append("HIGH_VOLATILITY")
@@ -791,6 +882,34 @@ def analyze_workload(
                 "effect (root-cause fixes for OOM / throttling)."
             )
 
+        # Readiness gate (#2): a workload whose memory usage swings wildly
+        # (CV above the readiness cut) is too spiky to size *down* reliably —
+        # trimming toward a mean it routinely blows past causes OOM. Suppress
+        # numeric *reductions* only; safety raises still fire. CV is
+        # Prometheus-only and a VPA target already accounts for volatility, so
+        # the gate is skipped when VPA drove the numbers.
+        too_spiky_to_reduce = (
+            has_prometheus
+            and rec_basis != "vpa"
+            and mem_cv > READINESS_MAX_CV_FOR_REDUCTION
+        )
+        if too_spiky_to_reduce:
+            actions.append(
+                f"Memory reduction suppressed — usage is too volatile to size "
+                f"down reliably (CV {mem_cv:.0f}% > {READINESS_MAX_CV_FOR_REDUCTION}%). "
+                f"Sizing toward the mean would risk OOM on the next swing. "
+                f"Collect a longer window or run VPA for a controller-computed "
+                f"target before trimming."
+            )
+
+        def _below_deadband(current: float, proposed: float) -> bool:
+            """Deadband (#4): True when the change is too small to be worth a
+            rollout. VPA-driven numbers bypass the deadband — the controller's
+            target is authoritative even for small moves."""
+            if rec_basis == "vpa" or current <= 0:
+                return False
+            return abs(proposed - current) < current * (RECOMMENDATION_DEADBAND_PCT / 100)
+
         # CPU recommendations (request)
         if not suppress_request_rightsizing:
             if cpu_request == 0:
@@ -799,14 +918,38 @@ def analyze_workload(
                 # Track as a raise so Pattern Groups & namespace rollups
                 # surface the additional capacity needed.
                 cpu_delta_m = -rec_cpu_req
+            elif rec_basis == "vpa":
+                # VPA is authoritative: follow its target directly rather than
+                # our P95-vs-request classification, which can land a workload
+                # in the dead zone between the over/under gates and silently
+                # drop VPA's recommendation. Deadband still applies (bypassed
+                # inside _below_deadband when rec_basis == "vpa", so any real
+                # VPA delta is surfaced).
+                if rec_cpu_req > cpu_request and not _below_deadband(cpu_request, rec_cpu_req):
+                    recommendations.append(f"Increase CPU request to {format_cpu(rec_cpu_req)}")
+                    actions.append(
+                        f"Raise CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)} (VPA target)"
+                    )
+                    cpu_delta_m = cpu_request - rec_cpu_req  # negative — needs more
+                elif rec_cpu_req < cpu_request and not _below_deadband(cpu_request, rec_cpu_req):
+                    recommendations.append(f"Reduce CPU request to {format_cpu(rec_cpu_req)}")
+                    actions.append(
+                        f"Reduce CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)} "
+                        f"(VPA target, saves {format_cpu(cpu_request - rec_cpu_req)})"
+                    )
+                    cpu_delta_m = cpu_request - rec_cpu_req  # positive — savings
             elif effective_cpu > cpu_request * (profile.cpu_under_pct / 100):
-                if rec_cpu_req > cpu_request:
+                if rec_cpu_req > cpu_request and not _below_deadband(cpu_request, rec_cpu_req):
                     recommendations.append(f"Increase CPU request to {format_cpu(rec_cpu_req)}")
                     actions.append(f"Raise CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)}")
                     cpu_delta_m = cpu_request - rec_cpu_req  # negative — needs more
             elif effective_cpu < cpu_request * (profile.cpu_over_pct / 100) and cpu_request > CPU_REDUCTION_BASELINE_M:
                 savings = cpu_request - rec_cpu_req
-                if savings >= profile.min_cpu_saving_m:
+                # Reduce only when it clears BOTH the absolute min-saving
+                # guardrail AND the percentage deadband — a 51m saving on a
+                # 2000m request is real millicores but a 2.5% move not worth
+                # a rollout.
+                if savings >= profile.min_cpu_saving_m and not _below_deadband(cpu_request, rec_cpu_req):
                     recommendations.append(f"Reduce CPU request to {format_cpu(rec_cpu_req)}")
                     actions.append(
                         f"Reduce CPU REQUEST from {format_cpu(cpu_request)} → {format_cpu(rec_cpu_req)} (saves {format_cpu(savings)})"
@@ -818,8 +961,41 @@ def analyze_workload(
                 recommendations.append(f"Set memory request: {format_memory(rec_mem_req)}")
                 actions.append(f"Set memory REQUEST to {format_memory(rec_mem_req)} (currently unset)")
                 mem_delta_mi = -rec_mem_req
+            elif rec_basis == "vpa":
+                # VPA authoritative (see CPU note). A raise is always safe. A
+                # *reduction* still honors the GC-runtime / bursty guards —
+                # those are working-set-shape safety guards independent of the
+                # signal source; even a VPA target shouldn't trim a known
+                # heap-retaining runtime. (The CV readiness gate is bypassed
+                # for VPA, since the controller already models volatility.)
+                if rec_mem_req > mem_request and not _below_deadband(mem_request, rec_mem_req):
+                    recommendations.append(f"Increase memory request to {format_memory(rec_mem_req)}")
+                    actions.append(
+                        f"Raise memory REQUEST from {format_memory(mem_request)} → {format_memory(rec_mem_req)} (VPA target)"
+                    )
+                    mem_delta_mi = mem_request - rec_mem_req  # negative
+                elif rec_mem_req < mem_request and not _below_deadband(mem_request, rec_mem_req):
+                    if gc_runtime:
+                        actions.append(
+                            f"Skip memory reduction — {deployment} matches GC runtime "
+                            f"pattern; heap retention makes a reduction unsafe even "
+                            f"against the VPA target"
+                        )
+                    elif bursty_workload:
+                        actions.append(
+                            f"Skip memory reduction — {deployment} matches bursty "
+                            f"workload class; manual review required even against "
+                            f"the VPA target"
+                        )
+                    else:
+                        recommendations.append(f"Reduce memory request to {format_memory(rec_mem_req)}")
+                        actions.append(
+                            f"Reduce memory REQUEST from {format_memory(mem_request)} → "
+                            f"{format_memory(rec_mem_req)} (VPA target)"
+                        )
+                        mem_delta_mi = mem_request - rec_mem_req  # positive
             elif effective_mem > mem_request * (profile.mem_under_pct / 100):
-                if rec_mem_req > mem_request:
+                if rec_mem_req > mem_request and not _below_deadband(mem_request, rec_mem_req):
                     recommendations.append(f"Increase memory request to {format_memory(rec_mem_req)}")
                     actions.append(
                         f"Raise memory REQUEST from {format_memory(mem_request)} → {format_memory(rec_mem_req)}"
@@ -828,7 +1004,11 @@ def analyze_workload(
             elif effective_mem < mem_request * (profile.mem_over_pct / 100):
                 # GC runtimes (JVM, Node.js) retain heap pages — `avg_mem` and even
                 # P95 underestimate working set. Never reduce mem request for them.
-                if gc_runtime:
+                if too_spiky_to_reduce:
+                    # Readiness gate already emitted the explanation above;
+                    # just don't issue the numeric reduction.
+                    pass
+                elif gc_runtime:
                     actions.append(
                         f"Skip memory reduction — {deployment} matches GC runtime "
                         f"pattern (JVM/Node.js); heap retention makes avg_mem "
@@ -844,7 +1024,7 @@ def analyze_workload(
                         f"Manual review required: avg/P95 do not represent "
                         f"working set under load"
                     )
-                else:
+                elif not _below_deadband(mem_request, rec_mem_req):
                     recommendations.append(f"Reduce memory request to {format_memory(rec_mem_req)}")
                     actions.append(
                         f"Reduce memory REQUEST from {format_memory(mem_request)} → {format_memory(rec_mem_req)}"
@@ -884,12 +1064,83 @@ def analyze_workload(
                 f"→ {format_memory(rec_mem_limit)} ({reason})"
             )
 
-        if has_prometheus and cpu_throttle > 5:
-            rec_cpu_limit = max(100, cpu_p95 * 1.2, cpu_max * 1.1, rec_cpu_req * 1.5)
-            recommendations.append(f"Increase CPU limit to {format_cpu(rec_cpu_limit)}")
-            actions.append(
-                f"Raise CPU LIMIT from {format_cpu(cpu_limit) if cpu_limit > 0 else 'none'} → {format_cpu(rec_cpu_limit)} (P0: active throttling)"
-            )
+        if has_prometheus and cpu_throttle > CPU_THROTTLE_P0_THRESHOLD_PCT:
+            # Throttling is caused by the CPU *limit* (CFS quota), not by the
+            # node being busy. There are two legitimate, opposing fixes and the
+            # "right" one is a cluster-policy call, not something the analyzer
+            # can decide from metrics alone:
+            #
+            #   - REMOVE/WIDEN the limit → the container bursts freely, throttling
+            #     stops, and the request still governs scheduling fairness. Best
+            #     for single-tenant / burst-friendly workloads owned by teams that
+            #     manage their own CPU behavior.
+            #   - KEEP (and widen) the limit → on a shared, multi-tenant node an
+            #     unlimited "use-all-you-can" container becomes a noisy neighbor
+            #     and starves co-tenants. A hard ceiling protects the rest of the
+            #     node at the cost of some throttling for this workload.
+            #
+            # `profile.cpu_limit_policy` selects the stance (neutral/burst/protect;
+            # set per-namespace via --profiles or globally via --cpu-limit-policy).
+            # Default "neutral" presents BOTH options with the tradeoff spelled
+            # out and recommends no direction. If no CPU limit is set, throttling
+            # comes from a namespace LimitRange / parent cgroup regardless of
+            # policy — surface that rather than inventing a limit.
+            policy = profile.cpu_limit_policy
+            if cpu_limit > 0:
+                widen_to = max(
+                    CPU_REDUCTION_BASELINE_M, cpu_p95 * 1.2, cpu_max * 1.1, rec_cpu_req * 1.5
+                )
+                remove_note = (
+                    f"REMOVE CPU LIMIT ({format_cpu(cpu_limit)}) — throttling "
+                    f"({cpu_throttle:.1f}%) is caused by the CFS quota, not node "
+                    f"pressure. Removing it lets the container burst; the request "
+                    f"({format_cpu(rec_cpu_req)}) still governs scheduling."
+                )
+                widen_note = (
+                    f"Widen CPU LIMIT {format_cpu(cpu_limit)} → {format_cpu(widen_to)} "
+                    f"(keeps a hard ceiling but a limit set at peak still throttles "
+                    f"the next spike)."
+                )
+                keep_note = (
+                    f"KEEP the CPU LIMIT to protect co-tenants — on a shared node an "
+                    f"unlimited container can starve neighbors. Widen it "
+                    f"{format_cpu(cpu_limit)} → {format_cpu(widen_to)} to reduce "
+                    f"throttling while retaining the ceiling."
+                )
+                if policy == CPU_LIMIT_POLICY_BURST:
+                    recommendations.append(
+                        f"Remove CPU limit (currently {format_cpu(cpu_limit)}) to stop throttling"
+                    )
+                    actions.append(f"{remove_note} Preferred fix under policy 'burst' (P0: active throttling).")
+                    actions.append(f"Alternative (if a hard ceiling is required): {widen_note}")
+                elif policy == CPU_LIMIT_POLICY_PROTECT:
+                    recommendations.append(
+                        f"Widen CPU limit {format_cpu(cpu_limit)} → {format_cpu(widen_to)} to reduce throttling"
+                    )
+                    actions.append(f"{keep_note} Preferred fix under policy 'protect' (P0: active throttling).")
+                    actions.append(f"Alternative (single-tenant / burst-friendly): {remove_note}")
+                else:  # neutral — present both, recommend no direction
+                    actions.append(
+                        f"CPU throttling ({cpu_throttle:.1f}%) is caused by the CFS "
+                        f"quota (the limit), not node pressure. There is a tradeoff — "
+                        f"pick one based on how this node is shared (P0: active throttling):"
+                    )
+                    actions.append(f"Option A (burst-friendly / single-tenant): {remove_note} Or {widen_note}")
+                    actions.append(f"Option B (multi-tenant / protect neighbors): {keep_note}")
+                    actions.append(
+                        "No default direction: removing the limit helps this workload "
+                        "but risks noisy-neighbor starvation; keeping it protects "
+                        "co-tenants but tolerates some throttling. Set a per-namespace "
+                        "`cpu_limit_policy` (burst/protect) or `--cpu-limit-policy` to "
+                        "make this decision automatically."
+                    )
+            else:
+                actions.append(
+                    f"CPU throttling ({cpu_throttle:.1f}%) observed with NO CPU "
+                    f"limit on the workload — the quota is coming from a namespace "
+                    f"LimitRange or a parent cgroup. Investigate/remove that limit; "
+                    f"do not add a CPU limit here (P0: active throttling)."
+                )
 
         # Final invariant check: if we recommend a request raise but no limit
         # change, and the proposed request would exceed the existing limit,
@@ -931,6 +1182,25 @@ def analyze_workload(
         actions.append("Enable VPA in 'Off' mode to validate recommendations")
     elif scaling_approach == ScalingApproach.HPA_AFTER_FIX:
         actions.append("Fix issues above BEFORE enabling HPA")
+
+    # Cross-check VPA against our own Prometheus estimate. If both signals
+    # exist and disagree by more than VPA_DISAGREEMENT_RATIO, surface it rather
+    # than silently trusting VPA — a large gap usually means the observation
+    # windows differ or the workload's profile recently shifted, and a human
+    # should look before applying. Advisory only; VPA still drove the number.
+    if has_prometheus:
+        if has_vpa_cpu and cpu_p95 > 0 and _diverges(vpa_cpu_target, cpu_p95, VPA_DISAGREEMENT_RATIO):
+            actions.append(
+                f"VPA/Prometheus CPU disagree — VPA target {format_cpu(vpa_cpu_target)} "
+                f"vs P95 {format_cpu(cpu_p95)}. Recommendation uses VPA; verify the "
+                f"observation window before applying."
+            )
+        if has_vpa_mem and mem_p95 > 0 and _diverges(vpa_mem_target, mem_p95, VPA_DISAGREEMENT_RATIO):
+            actions.append(
+                f"VPA/Prometheus memory disagree — VPA target {format_memory(vpa_mem_target)} "
+                f"vs P95 {format_memory(mem_p95)}. Recommendation uses VPA; verify the "
+                f"observation window before applying."
+            )
 
     # Determine if manual action required
     requires_manual = any(issue in ["REQUESTS_NOT_SET", "OOM_KILLED", "CPU_THROTTLED", "UNSTABLE"] for issue in issues)
@@ -998,6 +1268,11 @@ def analyze_workload(
         insufficient_data=insufficient_data,
         gc_runtime=gc_runtime,
         bursty_workload=bursty_workload,
+        vpa_present=vpa_present,
+        vpa_cpu_target=vpa_cpu_target,
+        vpa_mem_target=vpa_mem_target,
+        vpa_mem_upper=vpa_mem_upper,
+        rec_basis=rec_basis,
         cpu_delta_m=cpu_delta_m,
         mem_delta_mi=mem_delta_mi,
         policy_name=profile.name,
@@ -1013,6 +1288,7 @@ def analyze_workload(
         pod_count=pod_count,
         has_cpu_limit=cpu_limit > 0,
         has_mem_limit=mem_limit > 0,
+        vpa_present=vpa_present,
     )
     analysis.confidence = score
     analysis.confidence_band = band
@@ -1528,6 +1804,7 @@ def analyze_csv_file(
     formats: tuple = ("md",),
     state_dir: str | None = None,
     profiles_path: str | None = None,
+    cpu_limit_policy: str | None = None,
 ) -> dict:
     """Main analysis function.
 
@@ -1549,6 +1826,11 @@ def analyze_csv_file(
             schema. When omitted, every namespace uses the constants.py
             defaults — analyzer behavior is byte-identical to before this
             feature.
+        cpu_limit_policy: Optional. Global default stance for the CPU-limit
+            recommendation under throttling ("neutral"/"burst"/"protect"). Acts
+            as the fallback baseline; a per-namespace ``cpu_limit_policy`` in the
+            ``--profiles`` file still overrides it. When omitted, the neutral
+            (present-both, no-direction) default applies.
 
     Returns a dict mapping each requested format ("md", "json") to its
     output path. Backwards-compatible: if a single-format tuple is passed,
@@ -1586,15 +1868,36 @@ def analyze_csv_file(
     # Resolve the policy file once, then look up per-namespace overrides
     # in the analyze loop. Loading is intentionally eager so a malformed
     # policy file fails before we do any analysis work.
-    if profiles_path:
-        from k8s_advisor.profiles import load_profiles
+    #
+    # The global --cpu-limit-policy (if any) seeds the base profile so it
+    # becomes the fallback default; a per-namespace/`default:` block in the
+    # profiles file can still override it. Validated here so a bad flag value
+    # fails loudly rather than being silently ignored.
+    from k8s_advisor.profiles import load_profiles
 
-        profile_set = load_profiles(profiles_path)
+    base_profile = DEFAULT_PROFILE
+    if cpu_limit_policy is not None:
+        from dataclasses import replace as _replace
+
+        from k8s_advisor.constants import CPU_LIMIT_POLICY_VALUES
+
+        if cpu_limit_policy not in CPU_LIMIT_POLICY_VALUES:
+            raise ValueError(
+                f"--cpu-limit-policy must be one of {sorted(CPU_LIMIT_POLICY_VALUES)}, got {cpu_limit_policy!r}"
+            )
+        base_profile = _replace(DEFAULT_PROFILE, cpu_limit_policy=cpu_limit_policy)
+
+    if profiles_path:
+        profile_set = load_profiles(profiles_path, base=base_profile)
         ns_overrides = sorted(profile_set.namespaces.keys())
         if ns_overrides:
             print(f"📋 Loaded profiles: default + overrides for {ns_overrides}")
         else:
             print("📋 Loaded profiles: default only")
+    elif cpu_limit_policy is not None:
+        # No profiles file, but a global policy was requested — apply it to
+        # every namespace via the base default.
+        profile_set = ProfileSet(default=base_profile)
     else:
         profile_set = DEFAULT_PROFILE_SET
 
