@@ -92,7 +92,7 @@ repos:
       # break tests).
       - id: pytest
         name: pytest (full suite)
-        entry: python -m pytest tests -q
+        entry: python3 -m pytest tests -q
         language: system
         types: [python]
         pass_filenames: false
