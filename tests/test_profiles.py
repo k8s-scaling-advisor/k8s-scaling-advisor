@@ -293,3 +293,67 @@ def test_profile_set_for_namespace_unknown_falls_back_to_default():
     assert ps.for_namespace("hot").cpu_headroom == 2.5
     assert ps.for_namespace("cold").cpu_headroom == 1.99
     assert ps.for_namespace("").cpu_headroom == 1.99
+
+
+# ──────────────────────────────────────────────────────────────────────
+# cpu_limit_policy knob + global base seeding
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_default_profile_cpu_limit_policy_is_neutral():
+    """Unconfigured stance is neutral (present both, recommend no direction)."""
+    assert DEFAULT_PROFILE.cpu_limit_policy == "neutral"
+
+
+def test_load_profiles_accepts_cpu_limit_policy(tmp_path: Path):
+    policy = tmp_path / "policies.yaml"
+    policy.write_text(
+        """
+default:
+  cpu_limit_policy: protect
+namespaces:
+  team-burst:
+    cpu_limit_policy: burst
+""",
+        encoding="utf-8",
+    )
+    ps = load_profiles(policy)
+    assert ps.default.cpu_limit_policy == "protect"
+    assert ps.for_namespace("team-burst").cpu_limit_policy == "burst"
+    # Unlisted namespace inherits the default block's stance.
+    assert ps.for_namespace("other").cpu_limit_policy == "protect"
+
+
+def test_load_profiles_rejects_bad_cpu_limit_policy(tmp_path: Path):
+    policy = tmp_path / "policies.yaml"
+    policy.write_text(
+        """
+default:
+  cpu_limit_policy: yolo
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cpu_limit_policy"):
+        load_profiles(policy)
+
+
+def test_load_profiles_base_seeds_fallback(tmp_path: Path):
+    """A non-default base seeds knobs the profile omits; the file still wins
+    where it sets a value."""
+    base = Profile(name="default", cpu_limit_policy="burst")
+    policy = tmp_path / "policies.yaml"
+    policy.write_text(
+        """
+namespaces:
+  guarded:
+    cpu_limit_policy: protect
+""",
+        encoding="utf-8",
+    )
+    ps = load_profiles(policy, base=base)
+    # Default (no cpu_limit_policy in file) inherits the base's burst.
+    assert ps.default.cpu_limit_policy == "burst"
+    # Namespace override wins over the base.
+    assert ps.for_namespace("guarded").cpu_limit_policy == "protect"
+    # Unlisted namespace inherits base via default.
+    assert ps.for_namespace("other").cpu_limit_policy == "burst"

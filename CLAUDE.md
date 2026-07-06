@@ -11,7 +11,7 @@ K8s Scaling Advisor is a self-contained Kubernetes resource optimization toolkit
 ### Two-Phase Design
 
 1. **Collection Phase** (`main.py` → `k8s_advisor/collector/`)
-   - Gathers 40 metrics per workload from Kubernetes API and optionally Prometheus
+   - Gathers 44 metrics per workload from Kubernetes API and optionally Prometheus (incl. optional VPA recommendation)
    - Auto-detects Prometheus availability (5 methods: CRDs, service grep, labels, operator, namespaces)
    - Outputs CSV with all data to `reports/` directory
 
@@ -43,6 +43,26 @@ The analyzer must handle **two distinct data modes**:
 
 **Code Location:** Check CSV for `CPU_P95(m)` != 'N/A' to determine mode.
 
+### Recommendation Basis Precedence
+
+The numeric right-sizing base is selected in this order (see `rec_basis` on
+`WorkloadAnalysis`):
+
+1. **VPA target** (`VPA_Present` = true, target > 0) — a controller-computed,
+   *headroom-inclusive* right-sizing number. Used **verbatim** (floored by
+   guardrails); the profile headroom multiplier is NOT re-applied, to avoid
+   double-counting headroom. Preferred because VPA already accounts for
+   long-horizon usage + OOM history.
+2. **Prometheus P95** × profile headroom.
+3. **metrics-server avg** × profile headroom.
+
+VPA is an *optional input signal* exactly like Prometheus — absent on most
+clusters, and the analyzer degrades transparently. When VPA and Prometheus P95
+disagree by more than `VPA_DISAGREEMENT_RATIO` (2x), the recommendation still
+uses VPA but flags the gap for human review. A high-CV workload is never sized
+below its volatility floor, even when the VPA memory target is lower. A live
+VPA recommendation adds `VPA_CONFIDENCE_BONUS` to the confidence score.
+
 ## Key Commands
 
 ### Development Setup
@@ -65,8 +85,14 @@ k8s-advisor report -n namespace1 --graphs
 #                       so downstream tooling can suppress duplicate
 #                       Slack/Teams posts. Stored as <dir>/seen.json.
 #   --profiles <yaml>   Per-namespace policy overrides (headroom,
-#                       guardrail floors, efficiency thresholds). See
-#                       k8s_advisor/profiles.py for the schema.
+#                       guardrail floors, efficiency thresholds,
+#                       cpu_limit_policy). See k8s_advisor/profiles.py
+#                       for the schema.
+#   --cpu-limit-policy {neutral,burst,protect}
+#                       Global CPU-limit stance under throttling.
+#                       neutral (default): present both remove/widen and
+#                       keep-to-protect-co-tenants, recommend no direction.
+#                       A per-namespace cpu_limit_policy overrides this.
 ```
 
 ### Testing
@@ -125,8 +151,13 @@ ls reports/graphs/                  # PNG files if --graphs used
 - `Profile` dataclass holds the knobs the analyzer reads:
   `cpu_headroom`, `mem_headroom`, `min_cpu_request_m`, `min_mem_request_mi`,
   `min_cpu_saving_m`, `cpu_over_pct`, `cpu_under_pct`, `mem_over_pct`,
-  `mem_under_pct`. Defaults mirror `constants.py` so behavior is
-  byte-identical without `--profiles`.
+  `mem_under_pct`, `cpu_limit_policy`. Defaults mirror `constants.py` so
+  behavior is byte-identical without `--profiles`.
+- `cpu_limit_policy` (`neutral`/`burst`/`protect`) selects the CPU-limit stance
+  under throttling. `neutral` (default) presents both remove/widen and
+  keep-to-protect-co-tenants with no directional recommendation. The global
+  `--cpu-limit-policy` flag seeds the base profile via `load_profiles(..., base=)`
+  so a per-namespace value still wins.
 - `ProfileSet.for_namespace(ns)` resolves: namespace override → `default:` block → constants.py.
 - Strict YAML loader: unknown top-level keys, unknown knob names,
   non-positive values, and out-of-range percentages all raise with
@@ -220,14 +251,35 @@ if over-requested: max(16Mi, avg_mem * 1.25)
 
 **Limits:**
 ```python
-# CPU: Only change if throttled or wasteful
-if throttled: max(100m, P95*1.2, Max*1.1, request*1.5)
+# CPU: throttling is caused by the LIMIT (CFS quota), not node pressure. There
+# is no universally-correct fix — removing/widening the limit stops throttling
+# but risks noisy-neighbor starvation on multi-tenant nodes, while keeping it
+# protects co-tenants at the cost of some throttling. The stance is policy-
+# driven via profile.cpu_limit_policy (neutral/burst/protect; global default
+# --cpu-limit-policy). neutral (default) presents BOTH options and recommends no
+# direction. If throttling is seen with NO limit on the workload, blame the
+# namespace LimitRange / parent cgroup — do NOT invent a CPU limit.
+# (Threshold: CPU_THROTTLE_P0_THRESHOLD_PCT.)
 if wasteful (>3x request): reduce to max(request*2.0, P95*1.2)
 
 # Memory: Increase if OOM or near limit
 if OOM: max(request*1.5, P95*1.3, Max*1.2)
 if >90% limit: increase by 30%
 ```
+
+**Recommendation gating (best-practice robustness):**
+- **Deadband** (`RECOMMENDATION_DEADBAND_PCT`, 10%): skip raises/reductions whose
+  delta is under 10% of the current request — trivial moves cost a rollout for
+  no real benefit and cause run-over-run churn. Complements (does not replace)
+  the absolute CPU guardrails.
+- **Readiness / CV gate** (`READINESS_MAX_CV_FOR_REDUCTION`): suppress numeric
+  memory *reductions* when `Mem_Volatility_CV` exceeds the cut — sizing a spiky
+  workload toward its mean risks OOM. Safety *raises* still fire. Prometheus-only.
+- **VPA precedence:** when a VPA target drove the number (`rec_basis == "vpa"`),
+  it is authoritative — it follows VPA's direction directly (bypassing the
+  P95-vs-request classification), and bypasses both the deadband and the CV gate
+  (the controller already models volatility). Reductions still honor the
+  GC-runtime / bursty working-set guards even against a VPA target.
 
 ## WorkloadAnalysis Fields (recently added)
 
@@ -248,10 +300,16 @@ now carries:
 
 ## Output Formats
 
-### CSV (40 columns)
+### CSV (44 columns)
 **Location:** `reports/k8s-advisor_<cluster>_<timestamp>.csv`
 
-Columns include: Cluster, Namespace, Workload_Type, Deployment, CPU metrics (10), Memory metrics (10), Restart metrics (6), HPA info (3), PVC info (2), metadata (8).
+Columns include: Cluster, Namespace, Workload_Type, Deployment, CPU metrics (10), Memory metrics (10), Restart metrics (6), HPA info (3), VPA info (4), PVC info (2), metadata (8).
+
+**VPA columns** (`VPA_Present`, `VPA_CPU_Target(m)`, `VPA_Mem_Target(Mi)`,
+`VPA_Mem_Upper(Mi)`): populated only when a `VerticalPodAutoscaler` targets the
+workload and has produced a recommendation (recommender/`Off` mode counts).
+`N/A` otherwise. Appended to the schema, so existing name-keyed CSV readers are
+unaffected.
 
 ### Markdown Report
 **Location:** `reports/k8s-advisor_<cluster>_<timestamp>.md`

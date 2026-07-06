@@ -415,6 +415,150 @@ def get_hpa_for_workload(namespace: str, workload_name: str, workload_kind: str)
         return None
 
 
+def get_vpa_for_workload(namespace: str, workload_name: str, workload_kind: str) -> dict | None:
+    """Read the VerticalPodAutoscaler recommendation for a workload, if one exists.
+
+    VPA is treated as an *optional input signal*, exactly like Prometheus:
+    when a cluster runs VPA (commonly in recommender-only / "Off" mode), its
+    ``status.recommendation.target`` is a purpose-built right-sizing number and
+    is preferred over our own P95-derived estimate. When VPA is not installed
+    (the CRD is absent) or no VPA targets this workload, this returns ``None``
+    and the analyzer transparently falls back to Prometheus / metrics-server.
+
+    Args:
+        namespace: Namespace to query
+        workload_name: Name of deployment/statefulset
+        workload_kind: "Deployment" or "StatefulSet"
+
+    Returns:
+        Dict with summed target/bound millicores + Mi across containers, or
+        ``None`` when unavailable. Shape:
+        ``{"cpu_target_m", "mem_target_mi", "cpu_lower_m", "cpu_upper_m",
+           "mem_lower_mi", "mem_upper_mi", "container_count"}``.
+    """
+    try:
+        from kubernetes.client import CustomObjectsApi
+        from kubernetes.client.rest import ApiException
+
+        custom_api = CustomObjectsApi()
+        try:
+            vpas = custom_api.list_namespaced_custom_object(
+                group="autoscaling.k8s.io",
+                version="v1",
+                namespace=namespace,
+                plural="verticalpodautoscalers",
+            )
+        except ApiException as e:
+            # 404 → the VPA CRD is not installed on this cluster. That is the
+            # common case, not an error: stay silent and let the caller fall
+            # back to Prometheus / metrics-server.
+            if e.status == 404:
+                return None
+            print(f"Warning: could not list VPAs in {namespace}: {e}", file=sys.stderr)
+            return None
+
+        for vpa in vpas.get("items", []):
+            target_ref = (vpa.get("spec") or {}).get("targetRef") or {}
+            if target_ref.get("name") != workload_name or target_ref.get("kind") != workload_kind:
+                continue
+
+            recommendation = (vpa.get("status") or {}).get("recommendation") or {}
+            container_recs = recommendation.get("containerRecommendations") or []
+            if not container_recs:
+                # VPA targets this workload but hasn't produced a
+                # recommendation yet (still gathering samples). Treat as
+                # "no VPA signal" rather than zero.
+                return None
+
+            # Sum across containers so the VPA numbers are directly comparable
+            # to our per-workload (all-container) CPU_Request / Mem_Request.
+            cpu_target = mem_target = 0.0
+            cpu_lower = cpu_upper = mem_lower = mem_upper = 0.0
+            for cr in container_recs:
+                cpu_target += _parse_cpu_quantity_to_m(_rec_val(cr, "target", "cpu"))
+                mem_target += _parse_mem_quantity_to_mi(_rec_val(cr, "target", "memory"))
+                cpu_lower += _parse_cpu_quantity_to_m(_rec_val(cr, "lowerBound", "cpu"))
+                cpu_upper += _parse_cpu_quantity_to_m(_rec_val(cr, "upperBound", "cpu"))
+                mem_lower += _parse_mem_quantity_to_mi(_rec_val(cr, "lowerBound", "memory"))
+                mem_upper += _parse_mem_quantity_to_mi(_rec_val(cr, "upperBound", "memory"))
+
+            return {
+                "cpu_target_m": round(cpu_target, 2),
+                "mem_target_mi": round(mem_target, 2),
+                "cpu_lower_m": round(cpu_lower, 2),
+                "cpu_upper_m": round(cpu_upper, 2),
+                "mem_lower_mi": round(mem_lower, 2),
+                "mem_upper_mi": round(mem_upper, 2),
+                "container_count": len(container_recs),
+            }
+
+        return None
+    except Exception as e:
+        print(f"Error checking VPA in {namespace}: {e}", file=sys.stderr)
+        return None
+
+
+def _rec_val(container_rec: dict, bound: str, resource: str):
+    """Pull ``container_rec[bound][resource]`` (e.g. target/cpu), or None."""
+    return (container_rec.get(bound) or {}).get(resource)
+
+
+def _parse_cpu_quantity_to_m(value) -> float:
+    """Parse a Kubernetes CPU quantity string into millicores.
+
+    Handles the forms VPA emits: "250m" (millicores), "1"/"1.5" (cores),
+    "500000000n" (nanocores), "250000u" (microcores). Returns 0.0 for
+    None / unparseable input so a partial recommendation can't crash a run.
+    """
+    if value is None:
+        return 0.0
+    s = str(value).strip()
+    if not s:
+        return 0.0
+    try:
+        if s.endswith("m"):
+            return float(s[:-1])
+        if s.endswith("n"):
+            return float(s[:-1]) / 1_000_000.0
+        if s.endswith("u"):
+            return float(s[:-1]) / 1_000.0
+        # Bare number → cores.
+        return float(s) * 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_mem_quantity_to_mi(value) -> float:
+    """Parse a Kubernetes memory quantity string into Mi (mebibytes).
+
+    Handles binary suffixes (Ki/Mi/Gi/Ti), decimal suffixes (k/M/G/T), and
+    bare byte counts. Returns 0.0 for None / unparseable input.
+    """
+    if value is None:
+        return 0.0
+    s = str(value).strip()
+    if not s:
+        return 0.0
+    binary = {"Ki": 1 / 1024.0, "Mi": 1.0, "Gi": 1024.0, "Ti": 1024.0 * 1024.0}
+    decimal = {
+        "k": 1000.0 / (1024.0 * 1024.0),
+        "M": 1000.0**2 / (1024.0 * 1024.0),
+        "G": 1000.0**3 / (1024.0 * 1024.0),
+        "T": 1000.0**4 / (1024.0 * 1024.0),
+    }
+    try:
+        for suffix, factor in binary.items():
+            if s.endswith(suffix):
+                return float(s[: -len(suffix)]) * factor
+        for suffix, factor in decimal.items():
+            if s.endswith(suffix):
+                return float(s[: -len(suffix)]) * factor
+        # Bare number → bytes.
+        return float(s) / (1024.0 * 1024.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def get_events_for_workload(namespace: str, workload_name: str) -> dict[str, int]:
     """Get event counts for a workload (OOM kills, restarts, etc).
 

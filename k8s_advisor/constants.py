@@ -60,6 +60,37 @@ HEADROOM_MULTIPLIER_HIGH_VOLATILITY = 1.8  # CV >= 20%
 BURST_HEADROOM_MULTIPLIER = 1.5  # Limits should be ≥1.5x requests
 
 # ══════════════════════════════════════════════════════════════════════════════
+# CPU Throttling
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# CPU throttling above this percentage is a P0 live-performance issue. A CPU
+# *limit* is the cause of throttling: the kernel CFS quota parks the container
+# once it exceeds the limit within a period, adding latency even when the node
+# has spare CPU. Industry guidance (Google SRE, Kubernetes SIG-Node, Fairwinds,
+# and Ballast's explicit design stance — "CPU limits cause throttling rather
+# than reclaiming waste") is that removing/widening the CPU limit stops the
+# throttling. BUT the opposite failure mode is real too: on a multi-tenant node
+# an unlimited "use-all-you-can" container becomes a noisy neighbor and starves
+# co-tenants. There is no universally correct default — it depends on who owns
+# the app and how the cluster is shared. See CPU_LIMIT_POLICY_* below.
+CPU_THROTTLE_P0_THRESHOLD_PCT = 5
+
+# CPU-limit stance under throttling. Because the "right" answer is a cluster
+# policy decision (burst-friendly single-tenant vs. protect-the-neighbors
+# multi-tenant), the analyzer does not pick a direction by default — it presents
+# BOTH the remove/widen fix and the keep-the-limit stance with the multi-tenant
+# tradeoff spelled out. Operators can override per-namespace (profiles.py
+# `cpu_limit_policy:`) or globally (`--cpu-limit-policy`):
+#   - "neutral": present both options, recommend no direction (default)
+#   - "burst":   recommend removing/widening the limit to stop throttling
+#   - "protect": recommend keeping (and widening) the limit to protect co-tenants
+CPU_LIMIT_POLICY_NEUTRAL = "neutral"
+CPU_LIMIT_POLICY_BURST = "burst"
+CPU_LIMIT_POLICY_PROTECT = "protect"
+CPU_LIMIT_POLICY_DEFAULT = CPU_LIMIT_POLICY_NEUTRAL
+CPU_LIMIT_POLICY_VALUES = frozenset({CPU_LIMIT_POLICY_NEUTRAL, CPU_LIMIT_POLICY_BURST, CPU_LIMIT_POLICY_PROTECT})
+
+# ══════════════════════════════════════════════════════════════════════════════
 # CPU Request Guardrails
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -81,6 +112,46 @@ CPU_ABSOLUTE_FLOOR_M = 100  # Container runtime overhead minimum
 MEMORY_ABSOLUTE_FLOOR_MI = 256  # Practical minimum for container operation
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Recommendation Deadband
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Skip *raise* recommendations whose delta is smaller than this fraction of the
+# current request. Rationale: VPA and Ballast both use a drift/deadband (Ballast
+# ships a 10% threshold) so trivial deltas don't churn run-over-run. A rec that
+# nudges a request by 3% is noise — it costs a rollout and a review for no real
+# benefit, and it makes every report look "always changing".
+#
+# NOTE: this deadband applies to *raises*. CPU/memory *reductions* already have
+# their own absolute guardrails (CPU_REDUCTION_MIN_SAVING_M, the over-request
+# percentage gate), so the deadband complements rather than replaces those.
+# Reductions are additionally deadbanded by percentage so a marginal
+# over-request (e.g. 49% usage vs a 50% threshold) doesn't produce a 1% trim.
+RECOMMENDATION_DEADBAND_PCT = 10  # skip raises/reductions under 10% delta
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Statistical Readiness Gates
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Best practice (VPA, Ballast): do not emit a numeric right-sizing until enough
+# stable samples have accrued. A recommendation off a handful of noisy samples
+# is worse than none — it reads as authoritative but is statistically hollow.
+#
+# We can only gate on what the CSV carries. Two signals:
+#   1. CV (coefficient of variation) — too spiky to size reliably. Ballast skips
+#      workloads above a CV cut; we suppress the numeric *reduction* (raises for
+#      safety still fire) and say so, rather than trimming toward a mean that the
+#      workload routinely blows past.
+#   2. (Prometheus-only) CV is only meaningful with historical data, so this gate
+#      is a no-op in kubectl-only mode, where INSUFFICIENT_DATA already guards.
+#
+# CV here is a fraction-of-mean expressed as a percent (same units as
+# Mem_Volatility_CV in the CSV). 100 = std-dev equals the mean (extremely
+# spiky). We suppress numeric *reductions* above this — sizing a workload whose
+# usage swings ±100% of its mean down toward that mean is how you cause OOM /
+# throttle regressions.
+READINESS_MAX_CV_FOR_REDUCTION = 100
+
+# ══════════════════════════════════════════════════════════════════════════════
 # HPA Target Utilization
 # ══════════════════════════════════════════════════════════════════════════════
 #
@@ -90,6 +161,18 @@ MEMORY_ABSOLUTE_FLOOR_MI = 256  # Practical minimum for container operation
 
 HPA_TARGET_UTILIZATION_DEFAULT = 75
 HPA_TARGET_UTILIZATION_MAX = 80
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VPA Input Signal
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# When a VerticalPodAutoscaler recommendation exists it is preferred over our
+# own P95/avg estimate (it is a controller-computed, headroom-inclusive target).
+# But if VPA and our Prometheus P95 disagree by more than this ratio, we flag it
+# for human review rather than silently trusting VPA — a large gap usually means
+# the two observation windows differ or the workload's profile recently shifted.
+# 2.0 = "one is more than 2x the other".
+VPA_DISAGREEMENT_RATIO = 2.0
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Confidence / Sample-Size Gates
@@ -311,6 +394,15 @@ CSV_COLUMNS = [
     "Has_HPA",
     "HPA_Min_Replicas",
     "HPA_Max_Replicas",
+    # VPA recommendation, if a VerticalPodAutoscaler targets this workload
+    # (recommender/"Off" mode counts). Optional input signal — "N/A" when VPA
+    # is not installed or has produced no recommendation. Summed across
+    # containers so it is comparable to CPU_Request(m) / Mem_Request(Mi).
+    # (4 columns)
+    "VPA_Present",
+    "VPA_CPU_Target(m)",
+    "VPA_Mem_Target(Mi)",
+    "VPA_Mem_Upper(Mi)",
     # Storage (2 columns)
     "PVC_Access_Mode",
     "PVC_Count",
@@ -321,7 +413,8 @@ CSV_COLUMNS = [
     "Detected_Issues",  # Comma-separated issue flags
 ]
 
-# Total: 40 columns (was 39 before LastRestart_ExitCode)
+# Total: 44 columns (40 + 4 VPA columns; appended, so existing CSV readers
+# that key by column name are unaffected).
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Kubernetes Version Support
@@ -373,6 +466,11 @@ RESTART_RATE_THRESHOLD = UNSTABLE_RESTART_RATE_THRESHOLD
 # observable through metrics-server, so the data we have is more
 # meaningful even without Prometheus.
 LIMITS_BONUS = 0.05
+
+# Bonus when a VerticalPodAutoscaler recommendation drives the numbers — a
+# controller-computed target built from long-horizon usage + OOM history is a
+# stronger right-sizing signal than our own single-window estimate.
+VPA_CONFIDENCE_BONUS = 0.10
 
 # Band boundaries on the final clamped score.
 HIGH_CONF_THRESHOLD = 0.75

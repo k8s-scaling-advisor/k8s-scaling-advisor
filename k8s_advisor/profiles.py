@@ -41,6 +41,8 @@ from pathlib import Path
 from typing import Any
 
 from k8s_advisor.constants import (
+    CPU_LIMIT_POLICY_DEFAULT,
+    CPU_LIMIT_POLICY_VALUES,
     CPU_MIN_RECOMMENDED_M,
     CPU_OVER_REQUESTED_THRESHOLD,
     CPU_REDUCTION_MIN_SAVING_M,
@@ -63,6 +65,7 @@ _PROFILE_KEYS = frozenset(
         "cpu_under_pct",
         "mem_over_pct",
         "mem_under_pct",
+        "cpu_limit_policy",
     }
 )
 
@@ -83,6 +86,10 @@ class Profile:
     cpu_under_pct: float = CPU_UNDER_REQUESTED_THRESHOLD
     mem_over_pct: float = MEM_OVER_REQUESTED_THRESHOLD
     mem_under_pct: float = MEM_UNDER_REQUESTED_THRESHOLD
+    # Stance for the CPU-limit-under-throttling recommendation. One of
+    # neutral/burst/protect (see constants.CPU_LIMIT_POLICY_*). "neutral"
+    # presents both options without recommending a direction.
+    cpu_limit_policy: str = CPU_LIMIT_POLICY_DEFAULT
 
 
 # Sentinel used when no --profiles flag is passed. Matches constants.py
@@ -109,12 +116,16 @@ class ProfileSet:
 DEFAULT_PROFILE_SET = ProfileSet()
 
 
-def load_profiles(path: str | Path) -> ProfileSet:
+def load_profiles(path: str | Path, *, base: Profile = DEFAULT_PROFILE) -> ProfileSet:
     """Parse a policies YAML file into a ``ProfileSet``.
 
     Raises ``ValueError`` for unknown keys, malformed values, or missing
     required dependencies (PyYAML). The error string names the offending
     field so a typo is debuggable from CI logs alone.
+
+    ``base`` seeds the fallback for any knob a profile omits. Callers pass a
+    non-default base to fold in a global CLI default (e.g. ``--cpu-limit-policy``)
+    that a per-namespace/``default:`` block can still override.
     """
     try:
         import yaml  # type: ignore[import-untyped]
@@ -146,7 +157,7 @@ def load_profiles(path: str | Path) -> ProfileSet:
         raw_default = {}
     elif not isinstance(raw_default, dict):
         raise ValueError(f"`default:` must be a mapping, got {type(raw_default).__name__}")
-    default = _parse_profile("default", raw_default, base=DEFAULT_PROFILE)
+    default = _parse_profile("default", raw_default, base=base)
 
     raw_namespaces = raw.get("namespaces")
     if raw_namespaces is None:
@@ -198,7 +209,19 @@ def _parse_profile(name: str, block: Any, *, base: Profile) -> Profile:
         if key in block:
             overrides[key] = _require_pct(name, key, block[key])
 
+    if "cpu_limit_policy" in block:
+        overrides["cpu_limit_policy"] = _require_cpu_limit_policy(name, block["cpu_limit_policy"])
+
     return replace(base, **overrides)
+
+
+def _require_cpu_limit_policy(profile_name: str, value: Any) -> str:
+    if not isinstance(value, str) or value not in CPU_LIMIT_POLICY_VALUES:
+        raise ValueError(
+            f"Profile `{profile_name}`: `cpu_limit_policy` must be one of "
+            f"{sorted(CPU_LIMIT_POLICY_VALUES)}, got {value!r}"
+        )
+    return value
 
 
 def _require_positive_float(profile_name: str, key: str, value: Any) -> float:

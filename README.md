@@ -9,6 +9,11 @@ It supports two analysis modes:
 
 The report structure stays consistent in both modes.
 
+If a `VerticalPodAutoscaler` (recommender/`Off` mode counts) targets a workload,
+its controller-computed target is preferred over the tool's own estimate as the
+sizing basis. VPA is an optional signal — absent on most clusters, the analyzer
+degrades transparently to Prometheus, then metrics-server.
+
 ## Start Here
 
 - New user quickstart: `docs/GETTING_STARTED.md`
@@ -111,9 +116,20 @@ not enough for "show me the recommendations."
 
 ## What It Does
 
-- Collects per-workload CPU/memory requests, limits, usage, restart, HPA, PVC, and metadata into CSV
+- Collects per-workload CPU/memory requests, limits, usage, restart, HPA, VPA, PVC, and metadata into CSV
 - Detects P0/P1/P2/P3 issues (missing requests, OOM risk, instability, waste, etc.)
 - Recommends scaling approach (`HPA`, `VPA`, `HPA_AFTER_FIX`, `MANUAL`, `NONE`)
+- Sizes requests from the best available signal: VPA target → Prometheus P95 →
+  metrics-server average
+- Gates recommendations to reduce noise: a change deadband (skips sub-10% moves)
+  and a volatility/readiness gate (won't size spiky workloads down)
+- Under CPU throttling, takes a configurable stance on the CPU limit
+  (`--cpu-limit-policy` / per-namespace `cpu_limit_policy`). The default is
+  **neutral**: it presents both fixes — remove/widen the limit (best for
+  burst-friendly, single-tenant workloads) *and* keep the limit (protects
+  co-tenants on multi-tenant nodes from noisy-neighbor starvation) — and
+  recommends no direction. `burst` recommends removal; `protect` recommends
+  keeping/widening
 - Produces a markdown report with:
   - executive summary
   - detailed workload analysis
@@ -347,6 +363,25 @@ Prometheus Metrics:
 
 Prometheus mode uses P95-based sizing, detects memory leaks via CV%, and identifies CPU throttling.
 
+**With a VPA recommendation (preferred basis):**
+
+When a `VerticalPodAutoscaler` targets the workload, its target drives the number
+directly (the VPA target is headroom-inclusive, so the tool does not re-apply its
+own headroom multiplier):
+
+```text
+Issues: CPU_OVER_REQUESTED
+Current: CPU: 160m req (avg: 2m, P95: 5m) | Memory: 286Mi req (avg: 148Mi, P95: 254Mi)
+Recommended: CPU: 45m | Memory: 300Mi
+Scaling: VPA
+Actions:
+  - Reduce CPU REQUEST from 160m → 45m (VPA target, saves 115m)
+Rationale: Sizing basis: VerticalPodAutoscaler target (CPU 45m, mem 300Mi) — preferred over local estimate
+```
+
+If the VPA target and Prometheus P95 disagree by more than ~2x, the tool still
+uses VPA but flags the gap for review.
+
 ## Test Coverage Goals
 
 | Module | Target |
@@ -364,6 +399,22 @@ Unit tests run in < 5 seconds with no cluster dependency. E2E tests require a li
 
 **Do I need Prometheus?**
 No. The tool works without Prometheus using metrics-server only. Prometheus provides percentiles, volatility, and throttle data for better recommendations.
+
+**Does it use my VerticalPodAutoscaler recommendations?**
+Yes, if present. When a VPA (including recommender/`Off` mode) targets a workload,
+its target becomes the preferred sizing basis over the tool's own estimate. No VPA
+is required — it's read-only and optional, and the tool falls back to Prometheus /
+metrics-server when VPA is absent.
+
+**Should I remove CPU limits to stop throttling?**
+It depends on your cluster, so the tool won't decide for you by default. CPU
+throttling is caused by the limit (the CFS quota), so removing/widening it stops
+the throttling — but on a shared, multi-tenant node an unlimited container can
+starve its neighbors (the noisy-neighbor problem). By default (`neutral`) the
+report presents both options and the tradeoff. Set `--cpu-limit-policy burst`
+(single-tenant / teams that manage their own CPU) or `--cpu-limit-policy protect`
+(multi-tenant), or a per-namespace `cpu_limit_policy` in `--profiles`, to get a
+directional recommendation.
 
 **How long does collection take?**
 5-10 minutes for ~50 workloads with Prometheus. Without Prometheus, ~1-2 minutes.
