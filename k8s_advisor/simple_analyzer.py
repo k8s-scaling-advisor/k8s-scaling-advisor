@@ -888,11 +888,7 @@ def analyze_workload(
         # numeric *reductions* only; safety raises still fire. CV is
         # Prometheus-only and a VPA target already accounts for volatility, so
         # the gate is skipped when VPA drove the numbers.
-        too_spiky_to_reduce = (
-            has_prometheus
-            and rec_basis != "vpa"
-            and mem_cv > READINESS_MAX_CV_FOR_REDUCTION
-        )
+        too_spiky_to_reduce = has_prometheus and rec_basis != "vpa" and mem_cv > READINESS_MAX_CV_FOR_REDUCTION
         if too_spiky_to_reduce:
             actions.append(
                 f"Memory reduction suppressed — usage is too volatile to size "
@@ -1087,9 +1083,7 @@ def analyze_workload(
             # policy — surface that rather than inventing a limit.
             policy = profile.cpu_limit_policy
             if cpu_limit > 0:
-                widen_to = max(
-                    CPU_REDUCTION_BASELINE_M, cpu_p95 * 1.2, cpu_max * 1.1, rec_cpu_req * 1.5
-                )
+                widen_to = max(CPU_REDUCTION_BASELINE_M, cpu_p95 * 1.2, cpu_max * 1.1, rec_cpu_req * 1.5)
                 remove_note = (
                     f"REMOVE CPU LIMIT ({format_cpu(cpu_limit)}) — throttling "
                     f"({cpu_throttle:.1f}%) is caused by the CFS quota, not node "
@@ -1108,9 +1102,7 @@ def analyze_workload(
                     f"throttling while retaining the ceiling."
                 )
                 if policy == CPU_LIMIT_POLICY_BURST:
-                    recommendations.append(
-                        f"Remove CPU limit (currently {format_cpu(cpu_limit)}) to stop throttling"
-                    )
+                    recommendations.append(f"Remove CPU limit (currently {format_cpu(cpu_limit)}) to stop throttling")
                     actions.append(f"{remove_note} Preferred fix under policy 'burst' (P0: active throttling).")
                     actions.append(f"Alternative (if a hard ceiling is required): {widen_note}")
                 elif policy == CPU_LIMIT_POLICY_PROTECT:

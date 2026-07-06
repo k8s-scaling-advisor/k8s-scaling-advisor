@@ -1,10 +1,10 @@
 """Tests for the robustness enhancements:
 
-  #1 CPU-limit stance under throttling — NEUTRAL by default (present both the
-     remove/widen and keep-to-protect-co-tenants options, recommend no
-     direction), policy-driven via cpu_limit_policy (neutral/burst/protect)
-  #2 Statistical readiness gate — suppress memory *reductions* on too-spiky data
-  #4 Recommendation deadband — skip sub-threshold churny changes
+#1 CPU-limit stance under throttling — NEUTRAL by default (present both the
+   remove/widen and keep-to-protect-co-tenants options, recommend no
+   direction), policy-driven via cpu_limit_policy (neutral/burst/protect)
+#2 Statistical readiness gate — suppress memory *reductions* on too-spiky data
+#4 Recommendation deadband — skip sub-threshold churny changes
 """
 
 from dataclasses import replace
