@@ -67,14 +67,44 @@ repos:
       - id: shellcheck
 
   # ─── helm lint: chart correctness ────────────────────────────────
-  # The chart-lint CI job runs the same thing server-side; this just
-  # gives faster feedback. Kept opt-in via `stages: [manual]` so a
-  # developer who hasn't installed Helm can still commit normally —
-  # run with `pre-commit run --hook-stage manual --all-files` when
-  # touching the chart.
+  # Mirrors the `chart-lint` CI job. Files-scoped to charts/ so it only
+  # fires when a commit touches the chart; developers who never touch
+  # charts pay nothing. Requires Helm on PATH — if it's missing the hook
+  # errors loudly rather than skipping, so drift can't slip through.
   - repo: https://github.com/gruntwork-io/pre-commit
     rev: v0.1.30
     hooks:
       - id: helmlint
         files: ^charts/.+
-        stages: [manual]
+
+  # ─── local hooks: run against the repo's own environment ─────────
+  # These use `language: system`, so they run in the developer's active
+  # venv (the same interpreter that has the project + [dev] extras
+  # installed) instead of a pre-commit-managed isolated env.
+  - repo: local
+    hooks:
+      # Full test suite — mirrors the `tests` CI job. Runs at pre-PUSH,
+      # not pre-commit: it's the check most likely to fail at merge that
+      # a formatter can't catch, but running ~260 tests on every commit
+      # would train people toward `--no-verify`. pass_filenames=false so
+      # pytest gets no staged-file args; always_run so it fires even when
+      # the push touches no .py file (a fixture/data change can still
+      # break tests).
+      - id: pytest
+        name: pytest (full suite)
+        entry: python -m pytest tests -q
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      # helm template smoke — the second half of the chart-lint CI job.
+      # `helm lint` (above) checks chart syntax; this catches templates
+      # that lint clean but fail to render under default values.
+      - id: helm-template
+        name: helm template (default values)
+        entry: bash -c 'helm template ci-test charts/k8s-scaling-advisor --namespace ci-test > /dev/null'
+        language: system
+        files: ^charts/.+
+        pass_filenames: false
