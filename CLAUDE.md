@@ -248,10 +248,16 @@ now carries:
 
 ## Output Formats
 
-### CSV (40 columns)
+### CSV (44 columns)
 **Location:** `reports/k8s-advisor_<cluster>_<timestamp>.csv`
 
-Columns include: Cluster, Namespace, Workload_Type, Deployment, CPU metrics (10), Memory metrics (10), Restart metrics (6), HPA info (3), PVC info (2), metadata (8).
+Columns include: Cluster, Namespace, Workload_Type, Deployment, CPU metrics (10), Memory metrics (10), Restart metrics (6), HPA info (3), VPA info (4), PVC info (2), metadata (8).
+
+**VPA columns** (`VPA_Present`, `VPA_CPU_Target(m)`, `VPA_Mem_Target(Mi)`,
+`VPA_Mem_Upper(Mi)`): populated only when a `VerticalPodAutoscaler` targets the
+workload and has produced a recommendation (recommender/`Off` mode counts).
+`N/A` otherwise. Appended to the schema, so existing name-keyed CSV readers are
+unaffected.
 
 ### Markdown Report
 **Location:** `reports/k8s-advisor_<cluster>_<timestamp>.md`

@@ -311,6 +311,15 @@ CSV_COLUMNS = [
     "Has_HPA",
     "HPA_Min_Replicas",
     "HPA_Max_Replicas",
+    # VPA recommendation, if a VerticalPodAutoscaler targets this workload
+    # (recommender/"Off" mode counts). Optional input signal — "N/A" when VPA
+    # is not installed or has produced no recommendation. Summed across
+    # containers so it is comparable to CPU_Request(m) / Mem_Request(Mi).
+    # (4 columns)
+    "VPA_Present",
+    "VPA_CPU_Target(m)",
+    "VPA_Mem_Target(Mi)",
+    "VPA_Mem_Upper(Mi)",
     # Storage (2 columns)
     "PVC_Access_Mode",
     "PVC_Count",
@@ -321,7 +330,8 @@ CSV_COLUMNS = [
     "Detected_Issues",  # Comma-separated issue flags
 ]
 
-# Total: 40 columns (was 39 before LastRestart_ExitCode)
+# Total: 44 columns (40 + 4 VPA columns; appended, so existing CSV readers
+# that key by column name are unaffected).
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Kubernetes Version Support

@@ -140,6 +140,15 @@ def collect_workload_data(
     hpa_min = hpa["min_replicas"] if hpa else "N/A"
     hpa_max = hpa["max_replicas"] if hpa else "N/A"
 
+    # Check for a VerticalPodAutoscaler recommendation (optional input signal).
+    # Absent on most clusters → all four columns stay "N/A" and the analyzer
+    # falls back to Prometheus / metrics-server, exactly as before.
+    vpa = k8s.get_vpa_for_workload(namespace, name, workload_type)
+    vpa_present = vpa is not None
+    vpa_cpu_target = vpa["cpu_target_m"] if vpa else "N/A"
+    vpa_mem_target = vpa["mem_target_mi"] if vpa else "N/A"
+    vpa_mem_upper = vpa["mem_upper_mi"] if vpa else "N/A"
+
     # Check PVC access modes
     pvc_names = volumes.get("pvc_names", [])
     pvc_count = volumes.get("pvc_count", 0)
@@ -210,6 +219,10 @@ def collect_workload_data(
         "Has_HPA": "true" if has_hpa else "false",
         "HPA_Min_Replicas": hpa_min,
         "HPA_Max_Replicas": hpa_max,
+        "VPA_Present": "true" if vpa_present else "false",
+        "VPA_CPU_Target(m)": vpa_cpu_target,
+        "VPA_Mem_Target(Mi)": vpa_mem_target,
+        "VPA_Mem_Upper(Mi)": vpa_mem_upper,
         "PVC_Access_Mode": pvc_access_mode,
         "PVC_Count": pvc_count,
         "Container_Count": len(containers),
