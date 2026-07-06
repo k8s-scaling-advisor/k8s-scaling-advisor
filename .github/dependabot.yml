@@ -18,6 +18,10 @@ updates:
       time: "09:00"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+    # Wait 7 days before proposing newly published versions. Guards against
+    # malicious or unstable fresh releases (supply-chain risk).
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - python
@@ -52,6 +56,10 @@ updates:
       time: "09:00"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+    # Wait 7 days before proposing newly published versions. Guards against
+    # malicious or unstable fresh releases (supply-chain risk).
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - github-actions
