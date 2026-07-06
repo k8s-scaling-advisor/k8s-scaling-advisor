@@ -48,3 +48,7 @@ examples/*.md
 .cursor/
 .vscode/
 .idea/
+
+# Claude Code: keep shared agents/hooks/settings.json in git, but never the
+# per-developer local overrides.
+.claude/settings.local.json

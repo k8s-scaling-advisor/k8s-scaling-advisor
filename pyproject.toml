@@ -34,6 +34,10 @@ ignore = [
 "tests/*"   = ["B011", "S"]
 "e2e/*"     = ["B011", "S"]
 "scripts/*" = ["S"]
+# .claude/hooks/*: local Claude Code hook scripts that shell out to fixed,
+# trusted commands (ruff, git) — same trust profile as scripts/*. The
+# subprocess/security lints don't apply to first-party dev tooling.
+".claude/hooks/*" = ["S"]
 # detector.py: nested ifs are deliberately explicit for readability of the
 # multi-condition throttle/saturation rules — collapsing into one `and`
 # expression hurts review more than it helps.

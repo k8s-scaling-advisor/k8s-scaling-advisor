@@ -17,6 +17,12 @@ rules:
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
     verbs: ["get", "list", "watch"]
+  # VerticalPodAutoscaler is an optional input signal. This rule is harmless
+  # when the VPA CRD is absent (the runtime sees 404 and falls back); when VPA
+  # is installed it lets the collector read the controller-computed targets.
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
@@ -71,6 +77,11 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  # Optional VPA input signal — see the ClusterRole comment above. Harmless
+  # when the CRD is absent; enables VPA-target sizing when it's installed.
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
