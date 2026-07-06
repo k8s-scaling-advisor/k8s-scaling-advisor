@@ -107,6 +107,11 @@ jobs:
       chart_ref: ${{ steps.export.outputs.chart_ref }}
       chart_version: ${{ steps.export.outputs.chart_version }}
       release_tag: ${{ steps.vars.outputs.image_tag }}
+      # "true" for tag-push and workflow_run (real releases), "false" for
+      # ad-hoc workflow_dispatch rebuilds. Downstream publish-release gates
+      # on this instead of `github.ref_type`, which is unreliable across
+      # the workflow_run trigger context.
+      is_release: ${{ steps.vars.outputs.is_release }}
 
     steps:
       - name: Checkout
@@ -196,9 +201,11 @@ jobs:
             IS_RELEASE="false"
           fi
 
-          echo "image_tag=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
-          echo "image_repo=${IMAGE_REPO}" >> "${GITHUB_OUTPUT}"
-          echo "is_release=${IS_RELEASE}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "image_tag=${IMAGE_TAG}"
+            echo "image_repo=${IMAGE_REPO}"
+            echo "is_release=${IS_RELEASE}"
+          } >> "${GITHUB_OUTPUT}"
 
       # ── Slim image (core only, default tag) ──────────────────────────────
       - name: Docker metadata (slim)
@@ -464,7 +471,16 @@ jobs:
     # Run on real tag pushes AND on workflow_run from auto-tag (where
     # the build job resolved the tag at runtime). Skip on
     # workflow_dispatch — those are ad-hoc rebuilds, not Releases.
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_run'
+    #
+    # Gate on the build job's resolved `is_release` output, NOT on
+    # `github.ref_type`. `github.ref_type` is empty in the workflow_run
+    # trigger context, and — because this job `needs` build-sign-publish
+    # (which itself runs under `always()`) — a bare `if:` here silently
+    # drops the implicit success() gate. That combination skipped this
+    # job on the legitimate v0.1.8 tag push. `success()` restores the
+    # needs-passed gate; `is_release == 'true'` is set by the build job's
+    # `vars` step for tag-push + workflow_run and 'false' for dispatch.
+    if: success() && needs.build-sign-publish.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
