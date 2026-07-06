@@ -153,7 +153,7 @@ Example:
 Each Job pod writes reports to **`/app/reports`** inside its `emptyDir`
 volume. The advisor produces:
 
-- `k8s-advisor_<cluster>_<timestamp>.csv` — raw 40-column collection
+- `k8s-advisor_<cluster>_<timestamp>.csv` — raw 45-column collection
 - `k8s-advisor_<cluster>_<timestamp>.md` — markdown summary
 - `k8s-advisor_<cluster>_<timestamp>.json` — same data, machine-readable
 
@@ -464,3 +464,7 @@ sidecar (S3 / Slack / HTTP — see "Uploader sidecar" above).
 - Use **cluster-wide** only for central platform operations.
 - If running namespace-scoped, pass explicit `-n <namespace>` in chart args.
 - Avoid broad permissions unless your workflow requires cross-namespace collection.
+- The generated Role/ClusterRole includes read-only access to
+  `autoscaling.k8s.io/verticalpodautoscalers` so the tool can consume VPA
+  targets when VPA is installed. The rule is inert on clusters without the VPA
+  CRD — no extra setup is needed either way.

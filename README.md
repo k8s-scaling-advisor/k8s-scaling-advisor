@@ -1,8 +1,8 @@
 # K8s Scaling Advisor
 
-K8s Scaling Advisor collects workload metrics from Kubernetes (and optionally Prometheus), then generates actionable scaling and resource recommendations.
+K8s Scaling Advisor collects workload metrics from Kubernetes (and optionally Prometheus and VerticalPodAutoscaler recommendations), then generates actionable scaling and resource recommendations.
 
-It supports two analysis modes:
+It runs in one of two analysis modes, depending on which metric source is available:
 
 - **Prometheus-enabled mode**: richer recommendations using P50/P95/Max, restart rate, and memory volatility.
 - **kubectl-only mode**: basic, conservative analysis using metrics-server data.

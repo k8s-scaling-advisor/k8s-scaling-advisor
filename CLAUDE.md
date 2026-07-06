@@ -11,7 +11,7 @@ K8s Scaling Advisor is a self-contained Kubernetes resource optimization toolkit
 ### Two-Phase Design
 
 1. **Collection Phase** (`main.py` → `k8s_advisor/collector/`)
-   - Gathers 44 metrics per workload from Kubernetes API and optionally Prometheus (incl. optional VPA recommendation)
+   - Gathers 45 metrics per workload from Kubernetes API and optionally Prometheus (incl. optional VPA recommendation)
    - Auto-detects Prometheus availability (5 methods: CRDs, service grep, labels, operator, namespaces)
    - Outputs CSV with all data to `reports/` directory
 
@@ -300,10 +300,10 @@ now carries:
 
 ## Output Formats
 
-### CSV (44 columns)
+### CSV (45 columns)
 **Location:** `reports/k8s-advisor_<cluster>_<timestamp>.csv`
 
-Columns include: Cluster, Namespace, Workload_Type, Deployment, CPU metrics (10), Memory metrics (10), Restart metrics (6), HPA info (3), VPA info (4), PVC info (2), metadata (8).
+Columns include: identity (4), replicas (2), CPU metrics (10), memory metrics (10), stability/restart metrics (7), HPA info (3), VPA info (4), PVC info (2), container count (1), metadata (2). See `k8s_advisor/constants.py` → `CSV_COLUMNS` for the authoritative order.
 
 **VPA columns** (`VPA_Present`, `VPA_CPU_Target(m)`, `VPA_Mem_Target(Mi)`,
 `VPA_Mem_Upper(Mi)`): populated only when a `VerticalPodAutoscaler` targets the

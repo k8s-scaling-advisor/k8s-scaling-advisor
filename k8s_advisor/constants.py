@@ -349,7 +349,7 @@ COLOR_SCHEME = {
 # CSV Column Definitions
 # ══════════════════════════════════════════════════════════════════════════════
 
-# CSV output columns (39 columns total)
+# CSV output columns (45 columns total)
 # This defines the schema for data collection output
 CSV_COLUMNS = [
     # Cluster identification (3 columns)
@@ -413,8 +413,8 @@ CSV_COLUMNS = [
     "Detected_Issues",  # Comma-separated issue flags
 ]
 
-# Total: 44 columns (40 + 4 VPA columns; appended, so existing CSV readers
-# that key by column name are unaffected).
+# Total: 45 columns (41 base + 4 VPA columns; the VPA block was appended, so
+# existing CSV readers that key by column name are unaffected).
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Kubernetes Version Support

@@ -16,6 +16,9 @@ It covers:
 
 Optional:
 - Prometheus (for richer P50/P95/volatility/throttle insights)
+- A `VerticalPodAutoscaler` targeting a workload (recommender/`Off` mode
+  counts) — its controller-computed target becomes the preferred sizing basis.
+  Read-only; nothing is required for the tool to run.
 
 ## 1) Clone and install
 
@@ -127,7 +130,9 @@ Priority interpretation:
 2. Review P0/P1 findings with service owners.
 3. Apply request/limit changes gradually.
 4. Re-run after 24-72 hours and compare.
-5. For best accuracy, enable Prometheus and collect ~7 days of signal.
+5. For best accuracy, enable Prometheus and collect ~7 days of signal. If a
+   workload already runs a VPA (even in recommender/`Off` mode), the tool uses
+   its target as the sizing basis in preference to its own estimate.
 
 ## Troubleshooting
 
