@@ -256,6 +256,7 @@ jobs:
       # mode so the failing job log shows the actual CVEs. Mirrors the
       # `Render findings as table` step in cve-scan.yml.
       - name: Install Grype CLI (slim findings)
+        id: grype-cli-slim
         if: failure() && steps.scan-slim.outcome == 'failure'
         uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
 
@@ -263,7 +264,11 @@ jobs:
         if: failure() && steps.scan-slim.outcome == 'failure'
         env:
           IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-slim.outputs.digest }}
-        run: grype "${IMAGE_REF}" --only-fixed --fail-on high -o table --config .grype.yaml || true
+          # download-grype does NOT add grype to PATH; it exposes the
+          # absolute binary path via its `cmd` output. Use that.
+          GRYPE: ${{ steps.grype-cli-slim.outputs.cmd }}
+        run: |
+          "${GRYPE}" "${IMAGE_REF}" --only-fixed --fail-on high -o table --config .grype.yaml || true
 
       # ── Full image (with viz, -full tag) ─────────────────────────────────
       - name: Docker metadata (full)
@@ -311,6 +316,7 @@ jobs:
       # Same rationale as the slim table step above: surface the actual
       # CVEs in the log when the full-image SARIF scan fails the build.
       - name: Install Grype CLI (full findings)
+        id: grype-cli-full
         if: failure() && steps.scan-full.outcome == 'failure'
         uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
 
@@ -318,7 +324,11 @@ jobs:
         if: failure() && steps.scan-full.outcome == 'failure'
         env:
           IMAGE_REF: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-full.outputs.digest }}
-        run: grype "${IMAGE_REF}" --only-fixed --fail-on high -o table --config .grype.yaml || true
+          # download-grype does NOT add grype to PATH; it exposes the
+          # absolute binary path via its `cmd` output. Use that.
+          GRYPE: ${{ steps.grype-cli-full.outputs.cmd }}
+        run: |
+          "${GRYPE}" "${IMAGE_REF}" --only-fixed --fail-on high -o table --config .grype.yaml || true
 
       # ── Sign both images ──────────────────────────────────────────────────
       - name: Install Cosign
