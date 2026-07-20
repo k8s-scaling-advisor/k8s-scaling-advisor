@@ -245,7 +245,7 @@ jobs:
 
       - name: Upload Grype scan (slim)
         if: always() && steps.scan-slim.outputs.sarif != ''
-        uses: github/codeql-action/upload-sarif@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a  # v3
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # v3
         with:
           sarif_file: ${{ steps.scan-slim.outputs.sarif }}
           category: grype-container-slim
@@ -308,7 +308,7 @@ jobs:
 
       - name: Upload Grype scan (full)
         if: always() && steps.scan-full.outputs.sarif != ''
-        uses: github/codeql-action/upload-sarif@54f647b7e1bb85c95cddabcd46b0c578ec92bc1a  # v3
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9  # v3
         with:
           sarif_file: ${{ steps.scan-full.outputs.sarif }}
           category: grype-container-full
@@ -595,7 +595,7 @@ jobs:
           path: ./release-assets
 
       - name: Publish Release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
           tag_name: ${{ steps.notes.outputs.tag }}
           name: ${{ steps.notes.outputs.tag }}
