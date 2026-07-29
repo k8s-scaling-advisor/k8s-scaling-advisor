@@ -379,7 +379,7 @@ CPU reduction recommendations respect three guardrails:
 ```python
 # Uses kubeconfig context name - works for any cluster
 contexts, active = config.list_kube_config_contexts()
-cluster_name = active['name']  # "minikube", "sandbox", "production", etc.
+cluster_name = active["name"]  # "minikube", "sandbox", "production", etc.
 ```
 
 ## Report Naming Convention
