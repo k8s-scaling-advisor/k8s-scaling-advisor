@@ -90,9 +90,17 @@ repos:
       # pytest gets no staged-file args; always_run so it fires even when
       # the push touches no .py file (a fixture/data change can still
       # break tests).
+      # Resolve the interpreter robustly: an *activated* venv wins (its
+      # python3 is first on PATH), but a plain `git push` activates nothing,
+      # so fall back to a repo-local ./venv before bare python3 — which on
+      # some machines is a Homebrew interpreter without the [dev] extras.
       - id: pytest
         name: pytest (full suite)
-        entry: python3 -m pytest tests -q
+        entry: >-
+          bash -c 'PY=python3;
+          [ -x "$VIRTUAL_ENV/bin/python3" ] && PY="$VIRTUAL_ENV/bin/python3";
+          [ -z "$VIRTUAL_ENV" ] && [ -x venv/bin/python3 ] && PY=venv/bin/python3;
+          exec "$PY" -m pytest tests -q'
         language: system
         types: [python]
         pass_filenames: false
