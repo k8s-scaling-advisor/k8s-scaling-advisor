@@ -61,11 +61,14 @@ updates:
       time: "09:00"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 3
-    # Shorter cooldown than pip/actions: base-image bumps are usually
-    # security rebuilds we *want* promptly, and the release scan is the
-    # real safety net regardless.
+    # 7-day cooldown, same as pip/actions. A cooldown guards against a
+    # *compromised or republished* base digest — a risk the release-time
+    # Grype scan does NOT cover (it detects known CVEs, not malicious
+    # payloads). The daily cve-scan.yml separately tracks any CVE exposure
+    # on the already-published image, so waiting to adopt a fresh base
+    # doesn't leave us blind in the meantime.
     cooldown:
-      default-days: 2
+      default-days: 7
     labels:
       - dependencies
       - container
