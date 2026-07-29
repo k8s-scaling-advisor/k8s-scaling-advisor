@@ -44,6 +44,35 @@ updates:
           - "patch"
           - "minor"
 
+  # Container base image (Containerfile.chainguard).
+  # The Chainguard python base is pinned by digest; Dependabot's docker
+  # ecosystem watches those FROM ... @sha256 lines and opens a PR when the
+  # upstream digest moves — which is how OS-level CVE fixes (e.g. the
+  # python-3.14.6-r3 -> r4 rebuild) reach us without a manual `docker pull`.
+  #
+  # PR only, no auto-merge: the release still gates on a human merging with
+  # the `release` label, and release-image.yml's strict Grype scan refuses to
+  # publish if the bumped base still carries a fixed HIGH/CRITICAL. So a bad
+  # digest bump fails closed at release time rather than shipping.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    # Shorter cooldown than pip/actions: base-image bumps are usually
+    # security rebuilds we *want* promptly, and the release scan is the
+    # real safety net regardless.
+    cooldown:
+      default-days: 2
+    labels:
+      - dependencies
+      - container
+    commit-message:
+      prefix: "fix(security)"
+      include: scope
+
   # GitHub Actions used in workflows.
   # Action major-version bumps are usually safe (well-maintained, semver-honoring),
   # so we DO accept them here — different policy from Python deps because
