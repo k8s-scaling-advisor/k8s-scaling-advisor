@@ -7,15 +7,15 @@
 # Default target (no --target flag) builds full.
 #
 # Digest pins — update with:
-#   docker pull cgr.dev/chainguard/python:latest-dev && \
-#     docker inspect --format='{{index .RepoDigests 0}}' cgr.dev/chainguard/python:latest-dev
-#   docker pull cgr.dev/chainguard/python:latest && \
-#     docker inspect --format='{{index .RepoDigests 0}}' cgr.dev/chainguard/python:latest
+#   skopeo inspect --override-os linux --override-arch amd64 \
+#     --format '{{.Digest}}' docker://cgr.dev/chainguard/python:latest-dev
+#   skopeo inspect --override-os linux --override-arch amd64 \
+#     --format '{{.Digest}}' docker://cgr.dev/chainguard/python:latest
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Builder: shared base — installs core deps only
 # Tag: latest-dev (Python 3.14)
-FROM cgr.dev/chainguard/python@sha256:7406826ac06aa5e5b9b010c82b3f56aed62946c7fb5c7d4dfba012b88a6570c5 AS builder-core
+FROM cgr.dev/chainguard/python@sha256:cd42e3e78f19faffe161fccf60af83503ee3851dd12efdae7d2488148e2fcd49 AS builder-core
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -40,7 +40,7 @@ RUN pip install --target=/home/nonroot/install/site-packages -r requirements-viz
 # ──────────────────────────────────────────────────────────────────────────────
 # Runtime base: shared labels + env
 # Tag: latest (Python 3.14)
-FROM cgr.dev/chainguard/python@sha256:b3d3fbb8b9fe48950bab73d49bffa7496ff6f8a46ba570b302fc366f1396011a AS runtime-base
+FROM cgr.dev/chainguard/python@sha256:53757bfb153c99eb7005963b7e4ea3a8ba488badceab8487d3ba982ad54f2047 AS runtime-base
 
 LABEL org.opencontainers.image.source="https://github.com/k8s-scaling-advisor/k8s-scaling-advisor" \
       org.opencontainers.image.description="Kubernetes resource optimization and autoscaling advisor" \
