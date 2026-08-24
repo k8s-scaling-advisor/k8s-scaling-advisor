@@ -24,7 +24,10 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A skipped auto-tag workflow still triggers this workflow. Cancelling the
+  # in-progress run here lets that no-op trigger abort a real image publish.
+  # Queue invocations instead; resolve-trigger makes non-release runs cheap.
+  cancel-in-progress: false
 
 permissions:
   contents: read
