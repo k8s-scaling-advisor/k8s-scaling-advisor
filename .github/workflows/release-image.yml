@@ -22,10 +22,6 @@ on:
     workflows: ["Auto-tag merged release PR"]
     types: [completed]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
@@ -92,6 +88,12 @@ jobs:
       (github.event_name != 'workflow_run' ||
        (needs.resolve-trigger.result == 'success' &&
         needs.resolve-trigger.outputs.proceed == 'true'))
+    # Apply concurrency only after the workflow_run gate. GitHub retains one
+    # pending run per group, so a workflow-level group lets later no-op runs
+    # replace a pending release before resolve-trigger can skip them.
+    concurrency:
+      group: ${{ github.workflow }}-publish
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
