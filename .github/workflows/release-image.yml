@@ -236,7 +236,7 @@ jobs:
 
       - name: Run Grype scan (slim)
         id: scan-slim
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439  # v7.4.2
         with:
           image: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-slim.outputs.digest }}
           severity-cutoff: high
@@ -247,7 +247,7 @@ jobs:
 
       - name: Upload Grype scan (slim)
         if: always() && steps.scan-slim.outputs.sarif != ''
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28  # v3
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v3
         with:
           sarif_file: ${{ steps.scan-slim.outputs.sarif }}
           category: grype-container-slim
@@ -260,7 +260,7 @@ jobs:
       - name: Install Grype CLI (slim findings)
         id: grype-cli-slim
         if: failure() && steps.scan-slim.outcome == 'failure'
-        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
+        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439  # v7.4.2
 
       - name: Render slim findings as table
         if: failure() && steps.scan-slim.outcome == 'failure'
@@ -299,7 +299,7 @@ jobs:
 
       - name: Run Grype scan (full)
         id: scan-full
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439  # v7.4.2
         with:
           image: ${{ steps.vars.outputs.image_repo }}@${{ steps.build-full.outputs.digest }}
           severity-cutoff: high
@@ -310,7 +310,7 @@ jobs:
 
       - name: Upload Grype scan (full)
         if: always() && steps.scan-full.outputs.sarif != ''
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28  # v3
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v3
         with:
           sarif_file: ${{ steps.scan-full.outputs.sarif }}
           category: grype-container-full
@@ -320,7 +320,7 @@ jobs:
       - name: Install Grype CLI (full findings)
         id: grype-cli-full
         if: failure() && steps.scan-full.outcome == 'failure'
-        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
+        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439  # v7.4.2
 
       - name: Render full findings as table
         if: failure() && steps.scan-full.outcome == 'failure'
@@ -597,7 +597,7 @@ jobs:
           path: ./release-assets
 
       - name: Publish Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: ${{ steps.notes.outputs.tag }}
           name: ${{ steps.notes.outputs.tag }}
