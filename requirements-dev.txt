@@ -10,7 +10,7 @@ pytest-cov>=3.0.0
 pytest-mock>=3.16.0
 
 # Code quality
-ruff>=0.17.0
+ruff>=0.17.1
 black>=22.12.0
 mypy>=2.4.0
 
