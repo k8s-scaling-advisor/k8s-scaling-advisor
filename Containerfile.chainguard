@@ -15,7 +15,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Builder: shared base — installs core deps only
 # Tag: latest-dev (Python 3.14)
-FROM cgr.dev/chainguard/python@sha256:31dd69d84fe5235fe18f8ceb5b76620e6f44a0ce1f9b0d3a46c491576f8b453b AS builder-core
+FROM cgr.dev/chainguard/python@sha256:f73b534b99afc3a17c9d7a863a688d9c2577de23e12af21d55ad7b3fdbaf83f0 AS builder-core
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -40,7 +40,7 @@ RUN pip install --target=/home/nonroot/install/site-packages -r requirements-viz
 # ──────────────────────────────────────────────────────────────────────────────
 # Runtime base: shared labels + env
 # Tag: latest (Python 3.14)
-FROM cgr.dev/chainguard/python@sha256:31dd69d84fe5235fe18f8ceb5b76620e6f44a0ce1f9b0d3a46c491576f8b453b AS runtime-base
+FROM cgr.dev/chainguard/python@sha256:f73b534b99afc3a17c9d7a863a688d9c2577de23e12af21d55ad7b3fdbaf83f0 AS runtime-base
 
 LABEL org.opencontainers.image.source="https://github.com/k8s-scaling-advisor/k8s-scaling-advisor" \
       org.opencontainers.image.description="Kubernetes resource optimization and autoscaling advisor" \
